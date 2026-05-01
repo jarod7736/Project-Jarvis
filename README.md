@@ -1,88 +1,173 @@
-# Project Jarvis
+# Project: Jarvis — Voice AI Edge Device
 
-A personal AI assistant framework — inspired by Tony Stark's JARVIS — designed to automate tasks, answer questions, and interact with external services through a conversational interface.
+## What This Is
 
-## Features
+Jarvis is a personal, always-on voice assistant built on embedded hardware. The goal is a device that wakes on a custom wake word, understands natural speech, and can execute actions or answer questions — routing between local and cloud intelligence based on complexity. It is **not** dedicated to any single use case; it's a general-purpose voice-to-information and voice-to-action platform that can be extended over time.
 
-- Natural language understanding powered by large language models
-- Tool / function-calling support for real-world integrations (calendars, email, search, etc.)
-- Modular skill / plugin architecture — add new capabilities without touching core logic
-- Memory layer for persistent context across conversations
-- Voice input/output support (optional)
-- REST API for embedding Jarvis in other applications
+Think: a personal Jarvis that lives on your desk or shelf, works offline for simple tasks, reaches your homelab for complex reasoning, and never fully dies even without internet.
 
-## Getting Started
+-----
 
-### Prerequisites
+## Hardware
 
-- Python 3.11+
-- An Anthropic or OpenAI API key
+|Component                  |Role                                        |
+|---------------------------|--------------------------------------------|
+|M5Stack CoreS3 (ESP32-S3)  |Orchestrator, WiFi bridge, display, USB host|
+|M5Stack LLM Module (AX630C)|KWS, ASR, TTS — always local via UART/M5Bus |
 
-### Installation
+The LLM Module stacks directly onto the CoreS3 via M5Bus. UART communication at 115200bps 8N1 using JSON packets. Arduino library: `M5Module-LLM`.
 
-```bash
-git clone https://github.com/jarod7736/project-jarvis.git
-cd project-jarvis
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
+-----
 
-### Configuration
-
-Copy the example environment file and fill in your credentials:
-
-```bash
-cp .env.example .env
-```
-
-| Variable | Description |
-|---|---|
-| `ANTHROPIC_API_KEY` | Anthropic API key (required if using Claude) |
-| `OPENAI_API_KEY` | OpenAI API key (required if using GPT) |
-| `JARVIS_MODEL` | Model to use (default: `claude-sonnet-4-6`) |
-
-### Running
-
-```bash
-python -m jarvis
-```
-
-## Project Structure
+## Architecture
 
 ```
-project-jarvis/
-├── jarvis/
-│   ├── core/          # Conversation loop, memory, tool dispatch
-│   ├── skills/        # Individual capability modules
-│   ├── integrations/  # Third-party service connectors
-│   └── api/           # REST API server
-├── tests/
-├── .env.example
-└── requirements.txt
+Mic (LLM Module)
+  → KWS — custom wake word, always offline
+  → ASR — speech to text, always offline
+  → CoreS3 receives transcribed text via UART
+  → Intent Router (Qwen 0.5B on LLM Module)
+      ├── Simple/fast command → Qwen handles locally
+      ├── HA action/query    → HA REST API (WiFi)
+      ├── Complex reasoning  → OpenClaw / local LLM (WiFi/Tailscale)
+      └── Needs full AI      → Claude via OpenClaw
+  → Response text → CoreS3
+  → TTS (LLM Module) — spoken output, always offline
+  → CoreS3 display — shows transcript, status, readable data
 ```
 
-## Adding a Skill
+**Key principle:** The LLM Module's Qwen model is a *router and formatter*, not the primary intelligence. The CoreS3 is a thin orchestrator. Intelligence scales up through the tiers as needed.
 
-Create a new file in `jarvis/skills/` that implements the `Skill` interface:
+-----
 
-```python
-from jarvis.core import Skill, tool
+## Intelligence Tiers
 
-class MySkill(Skill):
-    @tool(description="Do something useful")
-    def my_tool(self, input: str) -> str:
-        return f"Result: {input}"
+|Tier|Handler                     |Latency |Use Case                              |
+|----|----------------------------|--------|--------------------------------------|
+|1   |Qwen 0.5B (local)           |~instant|Simple commands, intent classification|
+|2   |Local LLM via OpenClaw      |1–3s LAN|Complex queries, multi-step reasoning |
+|3   |Claude via OpenClaw         |3–6s    |Anything needing full intelligence    |
+|4   |Qwen only (offline fallback)|~instant|No network available                  |
+
+OpenClaw endpoint: `https://lobsterboy.tail1c66ec.ts.net` (Tailscale Serve)  
+OpenClaw exposes an OpenAI-compatible API — CoreS3 sends standard `POST /v1/chat/completions`.
+
+-----
+
+## Backends
+
+- **HA REST API** — light control, lock/unlock, sensor queries, automations
+- **OpenClaw / Local LLM** — complex questions, memory, multi-step tasks
+- **Claude API** — via OpenClaw as proxy
+- **Lightweight HTTP APIs** — weather, time, etc.
+- **On-device** — timers, reminders, canned responses
+
+-----
+
+## Connectivity
+
+WiFiMulti with graceful degradation:
+
+```
+Home WiFi + LAN          → Full capability, lowest latency
+Phone hotspot + Tailscale → Full capability, cellular latency
+Phone hotspot only        → Claude API direct, no local LLM
+No network               → Qwen local only (Tier 4)
 ```
 
-Jarvis auto-discovers skills on startup.
+Credentials stored in ESP32 NVS (non-volatile storage), not hardcoded.  
+HA long-lived token also stored in NVS.
 
-## Contributing
+-----
 
-1. Fork the repo and create a feature branch (`git checkout -b feat/my-feature`)
-2. Commit your changes with clear messages
-3. Open a pull request describing what and why
+## Display Usage (CoreS3 2" Screen)
 
-## License
+- ASR transcript — show what it heard
+- Status indicator — Listening / Thinking / Speaking
+- Readable data — temperatures, entity states, timers
+- Animation/waveform during TTS playback
 
-MIT
+-----
+
+## Project Plan
+
+### Phase 1 — Hardware Validation
+
+- [ ] Receive and unbox CoreS3 + LLM Module
+- [ ] Stack modules, confirm M5Bus connection
+- [ ] Flash basic M5Module-LLM Arduino example
+- [ ] Confirm KWS → ASR → TTS pipeline works end to end
+- [ ] Verify UART JSON communication from CoreS3
+
+### Phase 2 — Wake Word & Speech Pipeline
+
+- [ ] Train custom wake word via M5Stack KWS toolchain
+- [ ] Flash custom KWS model to LLM Module
+- [ ] Tune ASR sensitivity for target environment
+- [ ] Display ASR transcript on CoreS3 screen
+- [ ] Add status indicators (listening/thinking/speaking states)
+
+### Phase 3 — WiFi & Basic Connectivity
+
+- [ ] Implement WiFiMulti with home SSID + phone hotspot fallback
+- [ ] Store credentials in NVS
+- [ ] Add connectivity status to display
+- [ ] Test Tailscale reachability to OpenClaw from phone hotspot
+
+### Phase 4 — HA Integration
+
+- [ ] Store HA long-lived token in NVS
+- [ ] Implement HA REST API client on CoreS3
+- [ ] Hardcode 5–10 voice commands → HA actions (lights, locks, etc.)
+- [ ] Implement HA state queries ("is the garage door open?")
+- [ ] Test end-to-end: wake word → command → HA action → TTS confirmation
+
+### Phase 5 — Intent Routing via Qwen
+
+- [ ] Design intent classification prompt for Qwen 0.5B
+- [ ] Implement routing logic on CoreS3 (parse Qwen response, dispatch to backend)
+- [ ] Test routing accuracy across command categories
+- [ ] Add fallback handling for low-confidence classifications
+
+### Phase 6 — OpenClaw / Local LLM Integration
+
+- [ ] Implement OpenAI-compatible HTTP client on CoreS3
+- [ ] Route complex queries to OpenClaw endpoint
+- [ ] Handle streaming vs. non-streaming responses
+- [ ] Test latency and tune timeout thresholds
+
+### Phase 7 — Polish & Reliability
+
+- [ ] SD card logging (query/response pairs with timestamps)
+- [ ] MQTT integration alongside HA REST
+- [ ] OTA firmware update support
+- [ ] Graceful degradation testing across all connectivity tiers
+- [ ] Enclosure / mounting solution
+
+-----
+
+## Key Constraints & Known Limitations
+
+- **Qwen 0.5B** will hallucinate on complex or ambiguous queries — treat it as a router only
+- **ASR accuracy** degrades in noisy environments (shop, kitchen background noise)
+- **API latency** for OpenClaw/Claude calls will be 1–6s — need audio/visual feedback during wait
+- **LLM Module models** are AXERA-proprietary format — cannot load arbitrary HuggingFace models without conversion
+- **CoreS3 memory** is sufficient for orchestration but not heavy local inference
+
+-----
+
+## Reference Links
+
+- [M5Stack LLM Module Docs](https://docs.m5stack.com/en/module/Module-llm)
+- [M5Module-LLM Arduino API](https://docs.m5stack.com/en/stackflow/module_llm/arduino_api)
+- [LLM Module JSON API](https://docs.m5stack.com/en/stackflow/module_llm/api)
+- [CoreS3 Docs](https://docs.m5stack.com/en/core/CoreS3)
+- OpenClaw endpoint: `https://lobsterboy.tail1c66ec.ts.net`
+- HA Nabu Casa: `pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa`
+
+-----
+
+## Status
+
+**Current state:** Pre-hardware. Planning complete. Hardware en route.  
+**Next action:** Phase 1 — hardware validation once CoreS3 + LLM Module arrive.
