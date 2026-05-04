@@ -17,6 +17,8 @@
 #include <M5Unified.h>
 #include <M5ModuleLLM.h>
 
+#include "net/WiFiManager.h"
+
 M5ModuleLLM module_llm;
 M5ModuleLLM_VoiceAssistant voice_assistant(&module_llm);
 
@@ -59,7 +61,21 @@ void setup()
     Serial.begin(115200);
     delay(200);
     Serial.println();
-    Serial.println("=== Project Jarvis — Phase 1 Hardware Validation ===");
+    Serial.println("=== Project Jarvis — Phase 1 (voice) + Phase 3 (WiFi) ===");
+
+    // Phase 3: WiFi bring-up before voice loop. NVS-backed creds; first-run
+    // provisioning over USB Serial JSON. Falls through OFFLINE on failure so
+    // the validated voice loop still runs.
+    M5.Display.printf(">> WiFi: connecting..\n");
+    bool wifi_ok = jarvis::net::WiFiManager::begin(20000);
+    if (wifi_ok) {
+        M5.Display.printf(">> WiFi: %s\n", jarvis::net::WiFiManager::getIP().c_str());
+        M5.Display.printf(">> RSSI: %d dBm\n", jarvis::net::WiFiManager::getRSSI());
+    } else {
+        M5.Display.setTextColor(TFT_RED, TFT_BLACK);
+        M5.Display.printf(">> WiFi: OFFLINE (continuing)\n");
+        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    }
 
     int rxd = M5.getPin(m5::pin_name_t::port_c_rxd);
     int txd = M5.getPin(m5::pin_name_t::port_c_txd);
