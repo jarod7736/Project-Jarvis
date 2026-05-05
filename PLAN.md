@@ -196,6 +196,22 @@ User: "set a timer for 10 minutes"
 
 **Dependency:** Hardware in hand. Nothing else.
 
+#### Phase 1 retro (2026-05-04)
+
+The bundled `M5ModuleLLM_VoiceAssistant` preset **does not work end-to-end** against the current StackFlow stack on the LLM Module. Tested with Arduino library `M5Module-LLM v1.7.0` (latest as of 2026-05) against base image `M5_LLM_ubuntu22.04_20251121` and StackFlow packages at `llm-llm 1.12, llm-melotts 1.11, llm-vlm 1.11, llm-asr 1.10, llm-kws 1.11, llm-audio 1.9, lib-llm 1.8, llm-sys 1.6`. Two distinct incompatibilities, both reproducible:
+
+1. **`api_melotts.cpp setup()` response timeout is hardcoded to 15000ms.** The current `llm-melotts` (both 1.9 and 1.11) loads a ~465K-entry English lexicon that takes ~16s of CPU time alone (longer wall-clock). `voice_assistant.begin()` returns `-99` (`MODULE_LLM_ERROR_NONE` — "no work_id received in time"), the CoreS3 retries forever. Patching that single constant to `60000` gets past the symptom.
+
+2. **After the timeout patch, `audio.setup` no longer auto-starts the mic capture pipeline.** `voice_assistant.begin()` completes successfully and the display shows "Voice assistant ready," but `llm_audio` and `llm_kws` daemons sit at **0.0% CPU forever** — no PCM ever flows from the mic, KWS never sees audio, never detects the wake word, never triggers ASR. Verified by `/tmp/llm/` socket inventory: ASR/LLM/melotts output sockets are present, KWS socket and `pcm.cap.socket` are missing. The `voice_assistant` preset doesn't send the explicit `audio.cap` (or equivalent capture-start) command that this version of `llm-audio` requires.
+
+What works at the layer below: `module_llm.begin()`, `module_llm.checkConnection()`, `module_llm.sys.version()`, and individual `api_audio` / `api_kws` / `api_asr` / `api_llm` / `api_melotts` `setup()` calls (with timeout patches where needed).
+
+**Tried and didn't help:** rolling the 7 changed StackFlow packages back to the Nov 2025 base-image versions. The preset still fails identically — the audio-capture-trigger gap is in the base image too, not just the May 2026 candidates.
+
+**Phase 1 hardware validation is conceptually satisfied** — board enumerates, USB CDC works on COM9, M5Bus UART JSON traffic flows in both directions, services run, melotts loads its dictionary, llm loads qwen2.5. The bundled sketch is just the wrong abstraction for this device's firmware version.
+
+**Scope folded into Phase 2:** Phase 2 must also build the voice-loop wiring directly from `module_llm.audio.setup`, `module_llm.kws.setup`, `module_llm.asr.setup`, `module_llm.llm.setup`, `module_llm.melotts.setup` plus an explicit `audio.cap` start — replacing what `voice_assistant.begin()` was supposed to do. Custom JARVIS KWS was already Phase 2's main goal; this expands it to "custom KWS + custom voice-loop wiring."
+
 ---
 
 ### Phase 2 — Wake Word & Speech Pipeline
