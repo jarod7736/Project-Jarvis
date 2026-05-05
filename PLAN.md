@@ -381,6 +381,45 @@ void speak(const String& text);
 
 **Dependency:** Phase 1 complete.
 
+#### Phase 2 retro (2026-05-05)
+
+Hardware-validated against StackFlow FW **v1.6** (drifted up from `v1.3` between Phase 1 and Phase 2 — the Phase 1 retro's specific failure modes don't apply to this firmware). Custom voice-loop wiring works; here's what differs from the v1.0.0 spec and from the Phase 1 retro's hypotheses.
+
+**Confirmed working pipeline:**
+
+```
+sys.reset → audio.work → kws.setup → asr.setup → melotts.setup
+```
+
+**Protocol details that differ from the v1.0.0 spec:**
+
+1. **Stale daemon state across CoreS3 reboots is real.** The AX630C runs Linux; `kws/asr/llm/melotts` daemons persist across CoreS3 power cycles. Without `sys.reset` first, our `kws.setup` returns work_ids like `kws` (no number) — those are the still-running daemons from a prior session, and the leftover Voice Assistant chain auto-responds to wake events while the host CoreS3 sees nothing on UART. With `sys.reset`, the daemons restart and assign numbered work_ids (`kws.1000`, `asr.1001`, `melotts.1002`) per the v1.0.0 spec. **Always start with `sys.reset(true)`.**
+
+2. **`audio.setup` is deprecated in v1.3+** but `audio.work` (without prior setup) is what actually starts the mic capture pipeline on v1.6. Send raw `{"action":"work","work_id":"audio.1000"}` via `module_llm.msg.sendCmd`. The retro's "audio.cap" naming was wrong; the canonical action name is `work`.
+
+3. **ASR `data.delta` is the FULL running transcript hypothesis, not an incremental fragment.** Empirically verified: accumulating `delta` strings produces nonsense like `"what what what what happening what happening..."` because each message contains "what", " what what", " what what happening", etc. — the running ASR best-guess. Replace, don't accumulate. The arduino_api docs example matches this (it just prints `delta` directly, no buffer).
+
+4. **LISTENING window must extend on each ASR fragment, not be fixed at wake time.** A 10s budget set at wake fires the timeout while the user is still mid-sentence (and ASR is still streaming). Reset the deadline on every ASR fragment so 10s means "10s of silence after wake," not "10s of total speech."
+
+5. **`enkws=true` and chained `input` arrays cause the LLM Module's daemons to auto-route internally.** If you set up KWS+ASR+LLM+TTS and chain them via `input: ["asr.xxx", kws_work_id]`, the chain self-fires on wake and the host never sees the events. For Phase 2 (echo only, no LLM), keep ASR `input = ["sys.pcm", kws_work_id]` and don't set up LLM at all — that way ASR's transcript surfaces over UART for the host to act on.
+
+6. **KWS+ASR start latency drops the front of fast speech.** A user saying "HELLO what time is it" in one breath gets transcribed as "is it" — KWS detects the wake word and ASR comes up too late to catch "what time". User-facing fix is a deliberate pause; longer-term we may need to keep ASR running constantly with `enkws=false` and use KWS purely as a gating signal on the host side.
+
+**TTS error -21 was transient.** First two boot attempts after `sys.reset` returned error code `-21` from `melotts.setup` (not in the documented enum, which goes -1 to -17). Third attempt under identical config succeeded — work_id `melotts.1002` came back from the lib's standard 15s wait, no need for the 60s raw-JSON workaround. Likely a daemon-warmup race on cold start; bake in a fallback (display-only echo) and retry tolerance, but don't fork the lib for the 15s ceiling. The 60s workaround is kept in `setupMelottsWithLongTimeout()` as a second-attempt path because it's cheap insurance.
+
+**`sys.lsmode` from raw JSON does not respond within 3s** on this firmware. Diagnostic-only — left in the code with a warning log and skip-on-timeout.
+
+**Validation gates (PLAN.md:374-378):**
+
+| Gate | Status | Notes |
+|---|---|---|
+| 1. Wake word → LISTENING in <500ms | ✅ | Bundled HELLO KWS asset; JARVIS training deferred to Phase 2.5 |
+| 2. Transcript appears on display | ✅ | After fix #3 (replace not accumulate) and fix #4 (deadline-extend) |
+| 3. 10s silence → IDLE | ✅ | LISTENING timeout fires correctly when no speech follows wake |
+| 4. TTS plays audio | ⚠️ pending user confirmation | melotts.1002 set up successfully; speak() routes through `module_llm.melotts.inference()` |
+
+**Helper script added:** `scripts/build.sh` — Windows pio against WSL-mounted source via SMB hangs at "Processing cores3"; the helper copies the project to a Windows-local temp dir and runs pio there. Supports `run`, `upload`, `monitor`, `clean`.
+
 ---
 
 ### Phase 3 — WiFi & Basic Connectivity
