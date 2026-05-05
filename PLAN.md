@@ -508,6 +508,36 @@ bool isReachable(const char* host, uint16_t port, uint32_t timeoutMs);
 
 **Dependency:** Phase 3 (WiFi + NVS for HA token/host).
 
+#### Phase 4 retro (2026-05-05)
+
+Hardware-validated end-to-end. Voice → KWS → ASR → CommandHandler keyword match → HAClient bearer-auth POST → Nabu Casa cloud → HTTP 200 → TTS confirmation. Full round-trip latency informally observed at ~3 seconds (HA call dominates; CoreS3 + ASR are sub-second).
+
+**What stayed simple:**
+
+- The `String::indexOf` keyword match with a static table is fine for Phase 4 and is genuinely throwaway as PLAN.md says — Phase 5's IntentRouter replaces it. Don't grow this table beyond what's needed to validate the HAClient round-trip with the user's actual HA install.
+- `WiFiClientSecure::setInsecure()` works against the Nabu Casa cert. Cert pinning stays a deferred TODO.
+
+**Notes from the test pass:**
+
+- `http.useHTTP10(true)` and `http.setTimeout(8000)` together are the right combo. Without `useHTTP10`, the OpenAI-compat APIs return chunked encoding; HA's REST handler has historically also chunked larger state responses.
+- `http.end()` is called on every exit path in `HAClient::doRequest()` per CLAUDE.md's WiFiClientSecure-leak rule. Verified by leaving the device looping commands for ~10 minutes — no heap fragmentation, no OOM.
+- The `applyProvisioningJson()` function takes a bag-of-keys JSON so future phases (MQTT host, OC token, OTA URL) can extend the same Serial provisioning channel by adding a key — no new flow needed.
+- Token never re-enters Serial output after provisioning — `[PROV] Saved ha_token (N chars, value not echoed)` is the most we ever say about it.
+
+**Validation gates (PLAN.md:539-543 above):**
+
+| Gate | Status | Notes |
+|---|---|---|
+| Service call (light/turn_on, light/turn_off) | ✅ | `light.office_1_light` returned HTTP 200, "Done." / "Got it." rotation worked |
+| State query (sensor.*, cover.*) | ⏳ deferred | not exercised in the validation pass; HAClient::getState wired and unit-equivalent to callService |
+| Wrong token → graceful error TTS | ⏳ deferred | code path returns kErrHaUnreachable, not exercised on hardware |
+| Full timing | ✅ | observed ~3s wake-to-confirmation; dominated by HA call (~1.5-2s round trip via Nabu Casa cloud) |
+
+**Out of scope (left for Phase 5):**
+
+- The brittle keyword table. Real intent classification + entity extraction lands with the Qwen IntentRouter.
+- Distinguishing "no match" from "HA unreachable" in the user-facing TTS — Phase 5 unifies both behind the IntentRouter's parse-fail handling.
+
 ---
 
 ### Phase 5 — Intent Routing via Qwen

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "../config.h"
+#include "CommandHandler.h"
 
 namespace jarvis::app {
 
@@ -109,12 +110,25 @@ void tickStateMachine() {
                 g_asr_final = false;
                 String final_text = g_transcript;
                 g_transcript = "";
+                Serial.printf("[FSM] final transcript: \"%s\"\n", final_text.c_str());
                 enterTranscribing();
-                // Phase 2 stub: skip routing, go straight to TTS echo.
                 if (final_text.length() == 0) {
                     enterIdle();
                 } else {
-                    enterSpeaking(final_text);
+                    // Phase 4: dispatch through the hardcoded HA command
+                    // table. Display is already in THINKING from
+                    // enterTranscribing(), satisfying the CLAUDE.md rule
+                    // that the user sees feedback before the blocking HTTP
+                    // call. Phase 5 replaces this branch with the Qwen
+                    // intent router.
+                    CommandResult result = jarvis::app::dispatch(final_text);
+                    if (result.handled) {
+                        enterSpeaking(result.spoken);
+                    } else {
+                        // No command matched. Phase 5+ will fall through
+                        // to the LLM here; for now, ask for a rephrase.
+                        enterSpeaking(jarvis::config::kErrIntentParse);
+                    }
                 }
             } else if ((int32_t)(millis() - g_listen_deadline_ms) >= 0) {
                 Serial.println("[FSM] LISTENING timeout");
