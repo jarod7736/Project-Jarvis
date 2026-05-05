@@ -30,6 +30,7 @@ Jarvis/
 │   │                           #   first-run provisioning via USB Serial JSON
 │   ├── IntentRouter.h/.cpp     # Qwen JSON output → Route enum → dispatch to backend
 │   ├── CommandHandler.h/.cpp   # Phase 4 hardcoded HA command table; on-device handlers
+│   ├── Memory.h/.cpp           # On-device user memory: prefs, facts, corrections (SD-backed)
 │   └── Logger.h/.cpp           # SD card append-log: JSONL records per query
 │
 └── prompts/
@@ -116,6 +117,133 @@ Namespace: `"jarvis"` (Preferences). All keys ≤15 chars.
 | `fw_url` | OTA firmware URL (Phase 7) |
 
 First-run: if `wifi0_ssid` is empty, enter provisioning mode — display "Awaiting config via USB", read a JSON blob from `Serial` and write keys to NVS, then reboot.
+
+---
+
+## On-Device Memory & Learning
+
+User-level memory (preferences, facts, corrections) lives on the **CoreS3 SD card**, not NVS. NVS is reserved for credentials and configuration — small, write-rare, wear-limited. SD handles anything that grows or rewrites often. The LLM Module's SD card is owned by StackFlow on the AX630C and reachable only through the UART JSON API, which exposes model/audio operations, not arbitrary file I/O — treat it as model-weight storage only, not application memory.
+
+### SD Layout
+
+Mounted at `/jarvis/` on the CoreS3 SD card. Uses its own `SPIClass` instance (CS=4, SCK=36, MISO=35, MOSI=37) per the SPI-conflict pitfall.
+
+```
+/jarvis/
+├── prefs.json          # promoted, stable user preferences (small, always loaded)
+├── aliases.json        # surface-form rewrites applied before intent routing
+├── facts.jsonl         # long-term facts, append-only, compacted offline
+├── corrections.jsonl   # raw correction events, append-only
+├── episodes.jsonl      # one line per completed interaction (rolling, capped)
+└── index/
+    └── tags.json       # tag → [(file, offset)] postings list, rebuilt on boot
+```
+
+| File | Format | Write cadence | Read cadence | Cap |
+|---|---|---|---|---|
+| `prefs.json` | single JSON object | rare (promotion or explicit set) | once at boot, kept in PSRAM | 8 KB |
+| `aliases.json` | `{ "back room": "office" }` | rare | once at boot, kept in PSRAM | 4 KB |
+| `facts.jsonl` | `{ts,key,value,source,tags[]}` | on promotion | on intent dispatch (top-K) | rotate at 256 KB |
+| `corrections.jsonl` | `{ts,utterance,wrong,right,tags[]}` | on each correction | on intent dispatch (top-K) | rotate at 128 KB |
+| `episodes.jsonl` | `{ts,utterance,intent,route,ok}` | on each turn | rarely (review/distill) | rotate at 1 MB |
+| `index/tags.json` | `{tag:[{file,offset}]}` | rebuild on boot, append on write | every dispatch | PSRAM-resident |
+
+JSONL is used for append-heavy files: a single `f.write(line)` per write, no rewrite, no parser needed for the head. Compaction is offline (one-shot from a maintenance intent or OTA hook).
+
+### Lifecycle
+
+```
+boot → Memory::begin()
+        ├── mount SD on its own SPIClass
+        ├── load prefs.json, aliases.json into PSRAM (resident)
+        └── stream tails of facts.jsonl + corrections.jsonl to build tags.json index in PSRAM
+
+LISTENING → ASR transcript ready (g_asrReady)
+            ├── Memory::applyAliases(transcript)             # surface rewrite
+            └── pass into IntentRouter::route(transcript)
+
+ROUTING → IntentRouter assembles prompt with memory blocks (see below), calls Qwen / escalates
+          ├── on dispatch success: Memory::recordEpisode(...)
+          └── on user repair within N sec of SPEAKING→IDLE: Memory::recordCorrection(...)
+```
+
+All SD I/O happens in dispatch handlers, never in callbacks — same single-threaded FSM rule that governs TTS/ASR. Callbacks set flags only.
+
+### IntentRouter Prompt Assembly
+
+`IntentRouter::route(utterance)` builds the system prompt in this order, capped per tier:
+
+```
+[BASE_INTENT_PROMPT]              // static, from prompts/intent_prompt.h
+[PREFS_BLOCK]                     // selected keys from prefs.json
+[FACTS_BLOCK]                     // top-K facts by tag overlap × recency
+[CORRECTIONS_BLOCK]               // top-K (wrong → right) examples
+[FEW_SHOT_EXAMPLES]               // static + recent successful (utterance, intent) pairs
+[USER]: <utterance>
+```
+
+Retrieval is keyword/tag based — no on-device embeddings:
+
+1. Tokenize utterance → lowercase word set, drop stopwords.
+2. Look each token up in `tags.json` postings → candidate `(file, offset)` list.
+3. Score: `tag_overlap × recency_decay` (e.g. `0.5^(age_days / 30)`).
+4. Read top-K lines off SD by direct seek (cheap, no full scan).
+5. Drop into prompt; truncate the lowest-scored if over budget.
+
+Per-tier budgets — Qwen has tiny context, and the OFFLINE prompt is plain-text (no JSON), so memory injection is deliberately starved there to avoid breaking the prompt format:
+
+| Tier | PREFS | FACTS | CORRECTIONS | FEW_SHOT |
+|---|---|---|---|---|
+| LAN/TAILSCALE → Claude | full | top-8 | top-4 | full |
+| LAN → OpenClaw local | full | top-4 | top-2 | full |
+| Local Qwen (online intent) | 4 keys | top-2 | top-1 | static only |
+| OFFLINE Qwen (plain-text) | 2 keys | top-1 | 0 | static only |
+
+### Corrections & Promotion
+
+Two correction signals, both detected by `CommandHandler` / `IntentRouter`:
+
+- **Explicit:** repair utterances ("no, I meant the bedroom") detected before the next IDLE. The original utterance + corrected intent are appended to `corrections.jsonl`.
+- **Implicit:** an undo intent or re-issued command within N seconds of the prior action.
+
+Promotion is gated to avoid drift:
+
+- A correction is consulted via retrieval immediately, but is **not** trusted as a preference.
+- Promotion to `prefs.json` or `aliases.json` requires either an explicit "always do X" utterance, or N consistent corrections (start with N=3) followed by a confirmation TTS ("Should I always send 'back room' to the office?").
+- `forget(query)` purges matching entries from `corrections.jsonl` and `facts.jsonl` and rebuilds the relevant index slices.
+
+### Public Surface (`app/Memory.h`)
+
+```cpp
+void begin();
+void applyAliases(String& utterance);
+
+struct Context {
+  String prefs;
+  std::vector<String> facts;
+  std::vector<String> corrections;
+};
+Context buildContext(const String& utterance, ConnectivityTier tier);
+
+void recordEpisode(const String& utterance, const String& intent,
+                   const String& route, bool ok);
+void recordCorrection(const String& utterance, const String& wrongIntent,
+                      const String& rightIntent);
+void promote(const String& factOrPref);   // gated by N consistent corrections
+void forget(const String& query);          // user-triggered purge
+```
+
+`Memory` owns the SD `SPIClass`; nothing else touches the card.
+
+### Why not on-device fine-tuning?
+
+Qwen 0.5B on the LLM Module is loaded by StackFlow as a frozen model; the AX630C exposes inference, not training. The ESP32-S3 has neither the compute nor the framework for backprop. "Learning" here is retrieval-augmented adaptation — corrections are stored on SD and replayed into the prompt at decision time. Model-level improvement (distilling corrections into an updated few-shot block, or a Qwen LoRA) is a Phase 8+ topic, would run on OpenClaw, and would ship to the device via OTA.
+
+### Open Questions
+
+1. **Index persistence.** Rebuild `tags.json` every boot vs. persist + append. Default: rebuild-on-boot until boot time becomes painful.
+2. **Promotion threshold.** Explicit-only vs. implicit N=3 with confirmation TTS. Default: both, with explicit always winning.
+3. **Forget UX.** "Forget that" — last episode, last correction, or list-and-confirm. Default: last episode + offer "forget everything from today" follow-up.
 
 ---
 
@@ -357,7 +485,9 @@ bool isReachable(const char* host, uint16_t port, uint32_t timeoutMs);
 
 - **Strip JSON markdown:** Qwen 0.5B often wraps output in backticks. Add `stripJsonMarkdown(String s)` utility in `IntentRouter.cpp` that removes leading ` ```json ` and trailing ` ``` ` before parsing.
 
-**Files created:** `prompts/intent_prompt.h`, `app/IntentRouter.h/.cpp`, `app/state_machine.h/.cpp`  
+- **Memory injection:** `IntentRouter` calls `Memory::applyAliases()` on the transcript and `Memory::buildContext(transcript, tier)` to assemble the PREFS/FACTS/CORRECTIONS blocks before the static few-shot examples. See "On-Device Memory & Learning" for the prompt order and per-tier budgets. After dispatch, call `Memory::recordEpisode(...)`; on a repair utterance within N seconds of returning to IDLE, call `Memory::recordCorrection(...)`.
+
+**Files created:** `prompts/intent_prompt.h`, `app/IntentRouter.h/.cpp`, `app/state_machine.h/.cpp`, `app/Memory.h/.cpp`  
 **Updated:** `Jarvis.ino` — `loop()` now calls `tickStateMachine()` instead of direct dispatch
 
 **Key `IntentRouter` API:**
@@ -553,3 +683,4 @@ All error paths: set `g_state = ERROR`, call `display.setStatus(ERROR)`, `llmMod
 | Long responses slow TTS | Hard-cap at `max_tokens: 150` in request + sentence-boundary truncation at 500 chars |
 | No way to re-provision credentials post-deploy | USB Serial provisioning mode in Phase 3 is the escape hatch |
 | Qwen 0.5B hallucination on complex queries | It's a router only — complex queries always escalate to OpenClaw |
+| Correction loops poison memory (ASR misheard, user "corrects" → wrong pair stored) | Distinguish ASR-confidence from intent error; require N=3 consistent corrections before promoting to `prefs.json`; cap `corrections.jsonl` by recency; expose `forget(query)` |
