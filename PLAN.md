@@ -575,6 +575,37 @@ String route(const String& transcript, ConnectivityTier tier);
 
 **Dependency:** Phase 4 (HA client), Phase 2 (ASR pipeline; Qwen via UART already initialized).
 
+#### Phase 5 retro (2026-05-05)
+
+The on-device Qwen is **`qwen2.5-0.5b-prefill-20e`** — a *prefill-optimized* variant, not the full chat-tuned model. It does not reliably follow instruction prompts. Even with a 1172-char system prompt installed at `llm.setup()` (per the M5 firmware contract — system prompt at setup, user query at inference), Qwen produced unrelated completion text: *"the text of the Act"*, *"iv:1710.00669.pdf"*, *"non-negative real valued functions"* — clearly the model's pretraining-data top-of-mind, not anything it heard from us. Qwen-as-classifier fails on this device.
+
+**Working architecture: keyword classifier as primary, Qwen as best-effort hint.**
+
+`IntentRouter::route()` tries Qwen first (4s budget) and parses the JSON. On any failure (timeout, empty, unparseable, missing intent field), it falls through to a hand-coded keyword classifier covering all five intents (ha_command, ha_query, on_device, local_llm, claude). The keyword classifier handles the realistic phrasings that map cleanly; the final fallback hits `CommandHandler::dispatch` for anything the keyword classifier doesn't catch but the entity table does.
+
+This is more deterministic than expected and probably stays the design even after Phase 6 — Qwen 0.5B isn't a real classifier, and a keyword tree with five intent classes is simple and debuggable. If model-level intent classification matters later (e.g. for entity disambiguation), it'd want a different model on a different node, not the on-device prefill variant.
+
+**Lib forces the model name.** `api_melotts.cpp:31-44` overwrites the caller's `cfg.model` based on `llm_version` (set globally by `checkConnection()`) and `language`. On v1.6+ with `en_US` it forces `"melotts-en-default"`; older firmware used `"melotts_zh-cn"`. Our raw-JSON fallback path tries en-default first, then zh-cn — the package list (`device_stackflow_versions.md`) shows both model packs installed on this device.
+
+**melotts setup race fix.** Error code -21 from `melotts.setup` was hitting roughly 50/50 across boots. Two fixes resolved it:
+
+1. After `sys.reset(true)` returns, the SYS daemon has confirmed reset but the other daemons (audio/kws/asr/llm/melotts) are still loading. 500ms wasn't enough for melotts (~16s lexicon load on first warmup); bumped to 3s. melotts.setup gets called near the end of the boot chain so it has those 3s plus the ~5s of intervening unit setups before it runs.
+2. If lib path fails on attempt 1, wait 3s and retry. If still empty, fall through to raw-JSON paths with both model names. Empirically, attempt 2 succeeds on every boot tested after the warmup bump.
+
+**Validation outcomes vs PLAN.md:574 spec:**
+
+| Gate | Status | Notes |
+|---|---|---|
+| 20 test phrases ≥90% accuracy via Qwen | ❌ | Qwen unusable as classifier; replaced by keyword path |
+| Malformed Qwen → graceful fallback | ✅ | Keyword + CommandHandler chain catches every utterance shape tested |
+| HA regression (Phase 4 still works) | ✅ | "turn off the office light" → light/turn_off → 200 OK → "Done." |
+| OFFLINE tier → Qwen via TTS | ⏳ deferred | not exercised; offline plain-text path is a small follow-up |
+| Qwen inference time | ⚠️ | 4s budget hits the deadline frequently; partial output is unparseable JSON anyway |
+
+**Out of scope (left for Phase 6):**
+- The local_llm and claude intent branches return a placeholder ("Phase 6 will let me answer that"). OpenClaw client lands those.
+- The Memory module (PLAN.md "On-Device Memory & Learning"): not implemented. Phase 5 ships without prefs/facts/corrections injection. The retrieval+prompt-assembly logic depends on SD card support which Phase 7 brings.
+
 ---
 
 ### Phase 6 — OpenClaw / Local LLM Integration

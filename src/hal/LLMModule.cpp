@@ -4,22 +4,24 @@
 #include <M5ModuleLLM.h>
 
 #include "../config.h"
+#include "../prompts/intent_prompt.h"
 
 namespace jarvis::hal {
 
 namespace {
 
 // Build a setup JSON for the melotts unit and send it via the lib's raw cmd
-// path so we can wait longer than the lib's hardcoded 15s ceiling. Body
-// matches ApiMelottsSetupConfig_t defaults — any future tuning happens here.
-String buildMelottsSetupCmd(const String& request_id) {
+// path so we can wait longer than the lib's hardcoded 15s ceiling. The
+// model name varies by firmware version: v1.6+ uses "melotts-en-default"
+// (per api_melotts.cpp:38 in the lib); older firmware used "melotts_zh-cn".
+String buildMelottsSetupCmd(const String& request_id, const char* model) {
     JsonDocument doc;
     doc["request_id"]                = request_id;
     doc["work_id"]                   = "melotts";
     doc["action"]                    = "setup";
     doc["object"]                    = "melotts.setup";
     auto data                        = doc["data"].to<JsonObject>();
-    data["model"]                    = "melotts_zh-cn";  // covers EN+ZH despite the name
+    data["model"]                    = model;
     data["response_format"]          = "sys.pcm";
     auto input                       = data["input"].to<JsonArray>();
     input.add("tts.utf-8.stream");
@@ -91,7 +93,12 @@ bool LLMModule::begin(HardwareSerial* serial) {
     Serial.println("[LLMModule] sys.reset (clearing stale chain)...");
     int reset_ret = module_->sys.reset(true);
     Serial.printf("[LLMModule] sys.reset returned %d\n", reset_ret);
-    delay(500);  // let daemons settle
+    // sys.reset(true) waits for the SYS daemon's "reset over" but other
+    // daemons (audio, kws, asr, llm, melotts) keep loading after that. The
+    // melotts daemon in particular loads a large lexicon (~16s wall-clock)
+    // and isn't ready to respond to setup until well after sys.reset
+    // returns. 3s is the empirically-comfortable buffer; 500ms wasn't.
+    delay(3000);
 
     dumpAvailableModels();
 
@@ -99,14 +106,21 @@ bool LLMModule::begin(HardwareSerial* serial) {
     if (!setupKws())                       return false;
     if (!setupAsr())                       return false;
 
-    // TTS setup is allowed to fail in Phase 2 — we log it and continue. The
-    // FSM falls back to a display-only "speaking" path when hasTts() is false.
-    // KWS+ASR validation gates can still be exercised end-to-end.
+    // LLM (Qwen) is allowed to fail in Phase 5 too — IntentRouter will
+    // fall back to the hardcoded CommandHandler path when hasLlm() is false.
+    if (!setupLlm()) {
+        Serial.printf("[LLMModule] WARNING: llm unavailable (%s). "
+                      "Intent routing will fall back to keyword table.\n",
+                      last_error_.c_str());
+        last_error_ = "";
+    }
+
+    // TTS setup is allowed to fail too — display-only echo fallback.
     if (!setupMelottsWithLongTimeout()) {
         Serial.printf("[LLMModule] WARNING: melotts unavailable (%s). "
                       "Continuing with display-only echo.\n",
                       last_error_.c_str());
-        last_error_ = "";  // don't propagate as fatal
+        last_error_ = "";
     }
 
     ready_ = true;
@@ -191,48 +205,149 @@ bool LLMModule::setupAsr() {
     return true;
 }
 
-bool LLMModule::setupMelottsWithLongTimeout() {
-    // First try the library's standard call. On v1.3 firmware its 15s timeout
-    // may or may not be enough — if the daemon is fast on this build, this
-    // succeeds and we save a lot of complexity. If it returns empty, fall
-    // through to the raw-JSON workaround below.
-    Serial.println("[LLMModule] melotts.setup (lib path, 15s)");
-    melotts_work_id_ = module_->melotts.setup({}, "melotts_setup", "en_US");
-    if (melotts_work_id_.length() > 0) {
-        Serial.printf("[LLMModule] melotts_work_id=%s\n", melotts_work_id_.c_str());
-        return true;
+bool LLMModule::setupLlm() {
+    // The M5 firmware expects the system prompt at setup time and only the
+    // user query at inference time. Sending the full prompt+query at
+    // inference (as a Phase 5 first attempt did) makes Qwen treat it as
+    // completion fodder and produce unrelated text.
+    m5_module_llm::ApiLlmSetupConfig_t cfg;
+    cfg.input           = {"llm.utf-8"};
+    cfg.response_format = "llm.utf-8.stream";
+    cfg.enoutput        = true;
+    cfg.max_token_len   = 127;  // PLAN.md cap; matches the API doc default
+    // PROGMEM read into the config's String. The intent prompt is large
+    // (~1KB) and we only pay this once at boot.
+    cfg.prompt = (const __FlashStringHelper*)jarvis::prompts::kIntentPrompt;
+    llm_work_id_ = module_->llm.setup(cfg, "llm_setup");
+    if (llm_work_id_.length() == 0) {
+        last_error_ = "llm.setup failed";
+        return false;
+    }
+    Serial.printf("[LLMModule] llm_work_id=%s (system prompt: %u chars)\n",
+                  llm_work_id_.c_str(), (unsigned)cfg.prompt.length());
+    return true;
+}
+
+String LLMModule::queryLlm(const String& prompt, uint32_t timeoutMs) {
+    if (!hasLlm()) return String();
+
+    module_->msg.responseMsgList.clear();
+    const String request_id = "llm_query";
+    int rc = module_->llm.inference(llm_work_id_, prompt, request_id);
+    if (rc != MODULE_LLM_OK) {
+        Serial.printf("[LLMModule] llm.inference returned %d\n", rc);
+        return String();
     }
 
-    Serial.println("[LLMModule] lib path returned empty; trying raw 60s wait");
-    module_->msg.responseMsgList.clear();
-    const String request_id = "melotts_setup_long";
-    const String cmd        = buildMelottsSetupCmd(request_id);
-    module_->msg.sendCmd(cmd.c_str());
+    String accum;
+    accum.reserve(256);
+    const uint32_t deadline = millis() + timeoutMs;
+
+    while ((int32_t)(millis() - deadline) < 0) {
+        module_->update();
+        for (auto& m : module_->msg.responseMsgList) {
+            if (m.work_id != llm_work_id_) continue;
+            JsonDocument doc;
+            if (deserializeJson(doc, m.raw_msg)) continue;
+            if (doc["request_id"].as<String>() != request_id) continue;
+
+            String delta = doc["data"]["delta"].as<String>();
+            // Per the v1.0.0 spec, llm streaming `delta` is per-token; unlike
+            // ASR's full-snapshot semantics. Verified by reading existing
+            // main.cpp Phase 1 code which accumulates fragments.
+            accum += delta;
+
+            bool fin = doc["data"]["finish"] | false;
+            if (fin) {
+                module_->msg.responseMsgList.clear();
+                return accum;
+            }
+        }
+        module_->msg.responseMsgList.clear();
+        delay(10);
+    }
+    Serial.printf("[LLMModule] queryLlm deadline exceeded (got %u chars)\n",
+                  (unsigned)accum.length());
+    return accum;  // partial — still better than empty
+}
+
+// Try the lib's melotts.setup path. The lib forces the model name based on
+// llm_version + language; on v1.6+ with en_US that's "melotts-en-default".
+bool tryMelottsLib(M5ModuleLLM* module, String& work_id_out, int attempt) {
+    Serial.printf("[LLMModule] melotts.setup attempt %d (lib path, 15s)\n", attempt);
+    work_id_out = module->melotts.setup({}, "melotts_setup", "en_US");
+    return work_id_out.length() > 0;
+}
+
+// Raw-JSON setup with caller-supplied model name and 60s wait. Used when
+// the lib path keeps returning empty.
+bool tryMelottsRaw(M5ModuleLLM* module, const char* model,
+                   String& work_id_out, String& err_out) {
+    module->msg.responseMsgList.clear();
+    String request_id = "melotts_setup_raw_";
+    request_id += model;
+    const String cmd = buildMelottsSetupCmd(request_id, model);
+    module->msg.sendCmd(cmd.c_str());
+    Serial.printf("[LLMModule] raw melotts.setup model=%s\n", model);
 
     const uint32_t deadline = millis() + config::kMelottsSetupMs;
     while (millis() < deadline) {
-        module_->update();
-        for (auto& m : module_->msg.responseMsgList) {
+        module->update();
+        for (auto& m : module->msg.responseMsgList) {
             JsonDocument doc;
             if (deserializeJson(doc, m.raw_msg)) continue;
             if (doc["request_id"].as<String>() != request_id) continue;
 
             int code = doc["error"]["code"] | -99;
             if (code != 0) {
-                last_error_ = String("melotts.setup error code=") + code;
-                module_->msg.responseMsgList.clear();
+                err_out = String("error code=") + code + " (model=" + model + ")";
+                module->msg.responseMsgList.clear();
                 return false;
             }
-            melotts_work_id_ = doc["work_id"].as<String>();
-            Serial.printf("[LLMModule] melotts_work_id=%s (raw path)\n",
-                          melotts_work_id_.c_str());
-            module_->msg.responseMsgList.clear();
+            work_id_out = doc["work_id"].as<String>();
+            module->msg.responseMsgList.clear();
             return true;
         }
         delay(20);
     }
+    err_out = String("deadline exceeded (model=") + model + ")";
+    return false;
+}
 
-    last_error_ = "melotts.setup deadline exceeded";
+bool LLMModule::setupMelottsWithLongTimeout() {
+    // Attempt 1: lib's standard call. Often succeeds when the daemon is warm.
+    if (tryMelottsLib(module_, melotts_work_id_, 1)) {
+        Serial.printf("[LLMModule] melotts_work_id=%s\n", melotts_work_id_.c_str());
+        return true;
+    }
+
+    // The -21 / "lib returned empty" outcomes are typically transient — the
+    // melotts daemon hasn't fully warmed up after sys.reset. Wait, retry.
+    Serial.println("[LLMModule] lib attempt 1 failed; warming up 3s and retrying");
+    delay(3000);
+    if (tryMelottsLib(module_, melotts_work_id_, 2)) {
+        Serial.printf("[LLMModule] melotts_work_id=%s\n", melotts_work_id_.c_str());
+        return true;
+    }
+
+    // Last-ditch: raw-JSON with the v1.6+ model name, 60s wait. Then try the
+    // older zh-cn name in case the device only has that one for some reason.
+    String err1, err2;
+    if (tryMelottsRaw(module_, "melotts-en-default", melotts_work_id_, err1)) {
+        Serial.printf("[LLMModule] melotts_work_id=%s (raw en-default)\n",
+                      melotts_work_id_.c_str());
+        return true;
+    }
+    Serial.printf("[LLMModule] raw en-default: %s\n", err1.c_str());
+
+    if (tryMelottsRaw(module_, "melotts_zh-cn", melotts_work_id_, err2)) {
+        Serial.printf("[LLMModule] melotts_work_id=%s (raw zh-cn)\n",
+                      melotts_work_id_.c_str());
+        return true;
+    }
+    Serial.printf("[LLMModule] raw zh-cn: %s\n", err2.c_str());
+
+    last_error_ = "melotts.setup all paths failed";
     return false;
 }
 

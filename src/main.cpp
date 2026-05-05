@@ -11,6 +11,7 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 
+#include "app/IntentRouter.h"
 #include "app/NVSConfig.h"
 #include "app/state_machine.h"
 #include "config.h"
@@ -105,6 +106,7 @@ void setup() {
         while (true) delay(1000);
     }
 
+    jarvis::app::intentRouterBegin(&g_module);
     jarvis::app::stateMachineBegin(&g_module);
 
     Serial.printf("[READY] Say \"%s\" to wake.\n", jarvis::config::kWakeWord);

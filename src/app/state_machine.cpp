@@ -3,7 +3,8 @@
 #include <Arduino.h>
 
 #include "../config.h"
-#include "CommandHandler.h"
+#include "../net/WiFiManager.h"
+#include "IntentRouter.h"
 
 namespace jarvis::app {
 
@@ -115,20 +116,16 @@ void tickStateMachine() {
                 if (final_text.length() == 0) {
                     enterIdle();
                 } else {
-                    // Phase 4: dispatch through the hardcoded HA command
-                    // table. Display is already in THINKING from
-                    // enterTranscribing(), satisfying the CLAUDE.md rule
-                    // that the user sees feedback before the blocking HTTP
-                    // call. Phase 5 replaces this branch with the Qwen
-                    // intent router.
-                    CommandResult result = jarvis::app::dispatch(final_text);
-                    if (result.handled) {
-                        enterSpeaking(result.spoken);
-                    } else {
-                        // No command matched. Phase 5+ will fall through
-                        // to the LLM here; for now, ask for a rephrase.
-                        enterSpeaking(jarvis::config::kErrIntentParse);
-                    }
+                    // Phase 5: route through Qwen IntentRouter. Display is
+                    // already in THINKING from enterTranscribing(), so the
+                    // CLAUDE.md "feedback-before-blocking" rule holds. The
+                    // router internally falls back to the CommandHandler
+                    // keyword table when Qwen is unavailable or the JSON
+                    // can't parse, so Phase 4 behavior is preserved as a
+                    // safety net.
+                    auto tier = jarvis::net::WiFiManager::getConnectivityTier();
+                    RouteResult result = jarvis::app::route(final_text, tier);
+                    enterSpeaking(result.spoken);
                 }
             } else if ((int32_t)(millis() - g_listen_deadline_ms) >= 0) {
                 Serial.println("[FSM] LISTENING timeout");
