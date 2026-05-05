@@ -140,10 +140,13 @@ RouteResult dispatchByIntent(const String& transcript, const String& intent,
         return handleOnDevice(query.length() ? query : transcript);
     }
     if (intent == "local_llm" || intent == "claude") {
-        // Phase 6: dispatch to OpenClaw. Tier-gate first — Tailscale-only
-        // backend, so OFFLINE/HOTSPOT_ONLY can't reach it.
-        if (tier == jarvis::net::ConnectivityTier::OFFLINE) {
-            return {false, String(jarvis::config::kErrNoNetwork)};
+        // Phase 6: dispatch to OpenClaw. Tier-gate first — both LAN and
+        // TAILSCALE tiers have OC reachable. HOTSPOT_ONLY and OFFLINE
+        // don't, so we don't even try (saves the user a 5s hang waiting
+        // for HTTP -1).
+        if (tier != jarvis::net::ConnectivityTier::LAN &&
+            tier != jarvis::net::ConnectivityTier::TAILSCALE) {
+            return {false, String("I can't reach my brain right now.")};
         }
         const char* model = (intent == "claude")
                                 ? jarvis::config::kOcClaudeModel
@@ -151,7 +154,7 @@ RouteResult dispatchByIntent(const String& transcript, const String& intent,
         String reply = jarvis::net::LLMClient::query(
             query.length() ? query : transcript, model);
         if (reply.length() == 0) {
-            return {false, String(jarvis::config::kErrLlmTimeout)};
+            return {false, String("I can't reach my brain right now.")};
         }
         return {true, reply};
     }
@@ -166,16 +169,28 @@ RouteResult fallbackToKeyword(const String& transcript,
     String lc = transcript;
     lc.toLowerCase();
     const char* intent = classifyByKeyword(lc);
-    if (!intent) {
-        // Last resort: try CommandHandler — it has the entity table that
-        // recognizes phrasings the keyword classifier doesn't (e.g. "is the
-        // garage open" if startsWith fails on punctuation).
-        CommandResult c = jarvis::app::dispatch(transcript);
-        if (c.handled) return {c.ok, c.spoken};
-        return {false, String(jarvis::config::kErrIntentParse)};
+    if (intent) {
+        Serial.printf("[IntentRouter] keyword classified as %s\n", intent);
+        return dispatchByIntent(transcript, String(intent), String(), String(), tier);
     }
-    Serial.printf("[IntentRouter] keyword classified as %s\n", intent);
-    return dispatchByIntent(transcript, String(intent), String(), String(), tier);
+
+    // No keyword hit. Try CommandHandler's table — it catches phrasings the
+    // keyword classifier doesn't.
+    CommandResult c = jarvis::app::dispatch(transcript);
+    if (c.handled) return {c.ok, c.spoken};
+
+    // Still nothing. Last useful move before giving up: pretend it's
+    // local_llm and let gemma answer. ASR misrecognitions and unusual
+    // phrasings produce more value as "let the smart model figure it out"
+    // than "I wasn't sure what you meant." Tier-gated — OFFLINE still
+    // bails out.
+    if (tier != jarvis::net::ConnectivityTier::OFFLINE &&
+        jarvis::net::LLMClient::isConfigured()) {
+        Serial.println("[IntentRouter] no local match, asking OpenClaw");
+        return dispatchByIntent(transcript, String("local_llm"),
+                                String(), String(), tier);
+    }
+    return {false, String(jarvis::config::kErrIntentParse)};
 }
 
 }  // namespace

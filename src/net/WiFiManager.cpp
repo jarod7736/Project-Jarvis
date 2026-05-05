@@ -167,22 +167,31 @@ ConnectivityTier WiFiManager::getConnectivityTier() {
         return g_tier_cached;
     }
 
-    // Probe HA first — if it's reachable we're on a network with full
-    // backend access (LAN tier in PLAN.md's vocabulary covers this).
+    // Probe both backends so the tier reflects what's actually reachable.
+    // Originally we short-circuited on HA reachable → LAN, but that hid
+    // OpenClaw failures (e.g. CoreS3 not on Tailscale → can't resolve
+    // *.ts.net) when HA cloud was up. The router branches on this:
+    // local_llm/claude calls require OC; HA dispatch requires HA. Routing
+    // can fail silently if the tier reports "ok" without the right
+    // backend actually being reachable.
     bool ha_ok = isReachable(jarvis::config::kHaHostDefault,
                              jarvis::config::kHaPortDefault,
                              jarvis::config::kHaProbeMs);
-    if (ha_ok) {
-        g_tier_cached = ConnectivityTier::LAN;
+    bool oc_ok = isReachable(jarvis::config::kOpenclawProbeHost,
+                             jarvis::config::kOpenclawPortDefault,
+                             jarvis::config::kOpenclawProbeMs);
+    Serial.printf("[WIFI] probe: HA=%s OC=%s\n",
+                  ha_ok ? "ok" : "down",
+                  oc_ok ? "ok" : "down");
+    if (ha_ok && oc_ok) {
+        g_tier_cached = ConnectivityTier::LAN;          // full mesh
+    } else if (oc_ok) {
+        g_tier_cached = ConnectivityTier::TAILSCALE;    // OC only
     } else {
-        // HA unreachable. Try OpenClaw — Tailscale up but cloud routing
-        // for HA is broken (rare but possible on a phone hotspot blocking
-        // certain SNI hosts).
-        bool oc_ok = isReachable(jarvis::config::kOpenclawHostDefault,
-                                 jarvis::config::kOpenclawPortDefault,
-                                 jarvis::config::kOpenclawProbeMs);
-        g_tier_cached = oc_ok ? ConnectivityTier::TAILSCALE
-                              : ConnectivityTier::HOTSPOT_ONLY;
+        // HA may be up via cloud, but without OC the LLM intents have
+        // nowhere to go. Report HOTSPOT_ONLY so the router falls back
+        // gracefully.
+        g_tier_cached = ConnectivityTier::HOTSPOT_ONLY;
     }
 
     g_tier_checked_at  = millis();

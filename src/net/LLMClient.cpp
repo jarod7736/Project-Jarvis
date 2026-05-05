@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 
 #include "../app/NVSConfig.h"
@@ -79,15 +80,27 @@ String LLMClient::query(const String& userPrompt, const char* model) {
     Serial.printf("[LLMClient] POST %s model=%s prompt=%u chars\n",
                   url.c_str(), model, (unsigned)userPrompt.length());
 
-    WiFiClientSecure client;
-    client.setInsecure();          // Tailscale-issued cert; pinning is TODO
-
+    // The user's OpenClaw is LM Studio over Tailscale, plain HTTP on the
+    // Tailscale IP. The Nabu Casa default would be HTTPS. Branch on the
+    // scheme so we use the right transport class.
+    WiFiClient*       plain  = nullptr;
+    WiFiClientSecure* secure = nullptr;
     HTTPClient http;
     http.setTimeout(jarvis::config::kOcHttpTimeoutMs);
     http.useHTTP10(true);          // disable chunked transfer (CLAUDE.md)
 
-    if (!http.begin(client, url)) {
+    bool ok;
+    if (url.startsWith("https://")) {
+        secure = new WiFiClientSecure();
+        secure->setInsecure();     // cert pinning is TODO
+        ok = http.begin(*secure, url);
+    } else {
+        plain = new WiFiClient();
+        ok = http.begin(*plain, url);
+    }
+    if (!ok) {
         Serial.println("[LLMClient] http.begin failed");
+        delete plain; delete secure;
         return String();
     }
     http.addHeader("Authorization", String("Bearer ") + token);
@@ -97,11 +110,13 @@ String LLMClient::query(const String& userPrompt, const char* model) {
     if (code < 200 || code >= 300) {
         Serial.printf("[LLMClient] HTTP %d\n", code);
         http.end();
+        delete plain; delete secure;
         return String();
     }
 
     String resp = http.getString();
     http.end();
+    delete plain; delete secure;
 
     // Parse OpenAI-compat response: choices[0].message.content
     JsonDocument doc;

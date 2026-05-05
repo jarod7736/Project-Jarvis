@@ -18,6 +18,7 @@
 #include "hal/Display.h"
 #include "hal/LLMModule.h"
 #include "net/HAClient.h"
+#include "net/LLMClient.h"
 #include "net/WiFiManager.h"
 
 namespace {
@@ -78,18 +79,24 @@ void setup() {
     // the tier-tagged version once getConnectivityTier() probes complete.
     jarvis::hal::Display::updateFooter("...", wifi_ok ? jarvis::net::WiFiManager::getRSSI() : 0);
 
-    // Phase 4: prompt for HA credentials if missing. Short window (30s) so
-    // a normal boot isn't gated on user attention. The token is bag-of-keys
-    // JSON: {"ha_token":"...", "ha_host":"..."}. ha_host is optional —
-    // omitting it leaves the canonical Nabu Casa default in place.
-    if (wifi_ok && jarvis::NVSConfig::getHaToken().length() == 0) {
-        Serial.println("[HA] No ha_token in NVS. Send JSON to set it now,");
-        Serial.println("[HA] or skip and HA commands will return an error.");
+    // Phase 4/6: prompt for credentials if any of the optional services is
+    // unconfigured. Short window (30s). Bag-of-keys JSON: any combination
+    // of ssid, pass, ha_token, ha_host, oc_key, oc_host.
+    bool need_ha = (jarvis::NVSConfig::getHaToken().length() == 0);
+    bool need_oc = (jarvis::NVSConfig::getOcKey().length()   == 0);
+    if (wifi_ok && (need_ha || need_oc)) {
+        Serial.printf("[PROV] Missing creds: ha_token=%s oc_key=%s\n",
+                      need_ha ? "MISSING" : "set",
+                      need_oc ? "MISSING" : "set");
+        Serial.println("[PROV] Send JSON now, or skip and those services error.");
         jarvis::NVSConfig::provisionFromSerial(30000);
     }
     Serial.printf("[HA] configured=%s host=%s\n",
                   jarvis::net::HAClient::isConfigured() ? "yes" : "no",
                   jarvis::NVSConfig::getHaHost().c_str());
+    Serial.printf("[OC] configured=%s host=%s\n",
+                  jarvis::net::LLMClient::isConfigured() ? "yes" : "no",
+                  jarvis::NVSConfig::getOcHost().c_str());
 
     // M5Bus UART: 115200 8N1. Pins resolved at runtime via Port C — they
     // differ across CoreS3 revisions, don't hardcode.

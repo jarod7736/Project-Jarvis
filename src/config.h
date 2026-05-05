@@ -57,15 +57,23 @@ constexpr const char* kWakeWord = "HELLO";
 // (OpenClaw) add NVS overrides at keys `ha_host` and `oc_host`.
 constexpr const char* kHaHostDefault       = "pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa";
 constexpr uint16_t    kHaPortDefault       = 443;   // Nabu Casa cloud HTTPS
-constexpr const char* kOpenclawHostDefault = "lobsterboy.tail1c66ec.ts.net";
-constexpr uint16_t    kOpenclawPortDefault = 443;   // Tailscale-issued cert
+// OpenClaw default points at LM Studio on jarod-desktop's LAN IP. The
+// canonical Tailscale URL (https://lobsterboy.tail1c66ec.ts.net) doesn't
+// resolve from the CoreS3 — the device isn't on Tailscale and the router's
+// DNS doesn't know *.ts.net. To use Tailscale, configure a subnet router.
+constexpr const char* kOpenclawHostDefault = "http://192.168.1.108:1234";
+// Tier probe needs bare host:port — parsed out of kOpenclawHostDefault.
+// Keep this in sync if the URL changes; URL parsing in C++ on Arduino isn't
+// worth the cost for a one-line constant.
+constexpr const char* kOpenclawProbeHost = "192.168.1.108";
+constexpr uint16_t    kOpenclawPortDefault = 1234;
 
 // ── OpenClaw model routing (PLAN.md Phase 6) ──────────────────────────────
-// PLAN.md uses placeholder names; real model IDs come from the OpenClaw
-// install. The user can override at runtime via NVS-set defaults if these
-// names don't match their install.
-constexpr const char* kOcLocalModel  = "qwen2.5-7b-instruct";
-constexpr const char* kOcClaudeModel = "claude-sonnet-4-6";
+// User's OpenClaw runs LM Studio on jarod-desktop. Local model is
+// google/gemma-4-e4b. Claude model is TBD (not currently loaded — will
+// fail until configured); kept here so the routing structure is in place.
+constexpr const char* kOcLocalModel  = "google/gemma-4-e4b";
+constexpr const char* kOcClaudeModel = "claude-sonnet-4-6";  // TBD
 
 // HTTP timeout for the OpenClaw call. PLAN.md says 10s; the Tailscale
 // network adds a small margin to that.

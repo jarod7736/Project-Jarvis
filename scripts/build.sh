@@ -36,12 +36,16 @@ fi
 
 cmd="${1:-run}"
 
-# Sync source tree to Windows-local temp. Mirror only what pio needs to build:
-# src/, platformio.ini, lib/ (when we have one). Don't copy .pio (Windows pio
-# has its own cache), .git, docs/, tools/, platform-tools/.
+# Sync source tree to Windows-local temp. Mirror only what pio needs to
+# build: src/, platformio.ini, lib/ (when we have one). Don't copy .pio
+# (Windows pio has its own cache), .git, docs/, tools/, platform-tools/.
+#
+# CRITICAL: only refresh source dirs, never delete TEMP_DIR wholesale —
+# that wipes .pio/build/ and forces a 100s cold rebuild every time. With
+# the cache preserved, incremental builds for one-file changes are ~10s.
 sync_sources() {
-    rm -rf "$TEMP_DIR"
     mkdir -p "$TEMP_DIR"
+    rm -rf "$TEMP_DIR/src" "$TEMP_DIR/lib" "$TEMP_DIR/include"
     cp -r "$PROJECT_ROOT/src"            "$TEMP_DIR/"
     cp    "$PROJECT_ROOT/platformio.ini" "$TEMP_DIR/"
     if [[ -d "$PROJECT_ROOT/lib"     ]]; then cp -r "$PROJECT_ROOT/lib"     "$TEMP_DIR/"; fi
@@ -63,8 +67,10 @@ case "$cmd" in
         "$PIO" device monitor
         ;;
     clean)
+        # Full nuke — useful when libdeps drift or build state is corrupt.
+        # Day-to-day rebuilds should never need this.
         rm -rf "$TEMP_DIR"
-        echo "Cleaned $TEMP_DIR"
+        echo "Cleaned $TEMP_DIR (next build will be cold, ~100s)"
         ;;
     *)
         echo "Usage: $0 [run|upload|monitor|clean]" >&2
