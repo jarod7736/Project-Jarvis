@@ -19,6 +19,35 @@
 
 namespace {
 jarvis::hal::LLMModule g_module;
+
+// Footer state — track last-rendered tier/rssi so we only redraw when
+// they change, avoiding flicker at the configured refresh cadence.
+jarvis::net::ConnectivityTier g_last_tier = jarvis::net::ConnectivityTier::OFFLINE;
+int                            g_last_rssi = 0;
+uint32_t                       g_last_footer_ms = 0;
+
+// Refresh the footer's tier/rssi line. Cheap when tier is cached; the
+// underlying probe can take 2-5s so we only call this from IDLE so it
+// doesn't stall a voice cycle.
+void refreshFooterIfIdle() {
+    using jarvis::app::currentState;
+    using jarvis::hal::DeviceState;
+    using jarvis::net::WiFiManager;
+
+    if (currentState() != DeviceState::IDLE) return;
+    if (millis() - g_last_footer_ms < 1000) return;  // throttle render
+
+    auto tier = WiFiManager::getConnectivityTier();
+    int  rssi = WiFiManager::isConnected() ? WiFiManager::getRSSI() : 0;
+    if (tier == g_last_tier && rssi == g_last_rssi) {
+        g_last_footer_ms = millis();
+        return;
+    }
+    jarvis::hal::Display::updateFooter(jarvis::net::tierName(tier), rssi);
+    g_last_tier = tier;
+    g_last_rssi = rssi;
+    g_last_footer_ms = millis();
+}
 }  // namespace
 
 void setup() {
@@ -39,12 +68,12 @@ void setup() {
         Serial.printf(" OK  ip=%s rssi=%d\n",
                       jarvis::net::WiFiManager::getIP().c_str(),
                       jarvis::net::WiFiManager::getRSSI());
-        jarvis::hal::Display::updateFooter(
-            "ON", jarvis::net::WiFiManager::getRSSI());
     } else {
         Serial.println(" OFFLINE");
-        jarvis::hal::Display::updateFooter("OFF", 0);
     }
+    // Initial footer paint — refreshFooterIfIdle() will replace this with
+    // the tier-tagged version once getConnectivityTier() probes complete.
+    jarvis::hal::Display::updateFooter("...", wifi_ok ? jarvis::net::WiFiManager::getRSSI() : 0);
 
     // M5Bus UART: 115200 8N1. Pins resolved at runtime via Port C — they
     // differ across CoreS3 revisions, don't hardcode.
@@ -69,4 +98,5 @@ void setup() {
 void loop() {
     g_module.update();
     jarvis::app::tickStateMachine();
+    refreshFooterIfIdle();
 }

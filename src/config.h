@@ -52,6 +52,21 @@ constexpr float kAsrRule3 = 10.0f;  // total recognition deadline (=kListenTimeo
 // Until then we use the bundled HELLO model that Phase 1 already validated.
 constexpr const char* kWakeWord = "HELLO";
 
+// ── Connectivity tier probes (PLAN.md Phase 3) ────────────────────────────
+// Defaults from CLAUDE.md "External endpoints". Phase 4 (HA) and Phase 6
+// (OpenClaw) add NVS overrides at keys `ha_host` and `oc_host`.
+constexpr const char* kHaHostDefault       = "pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa";
+constexpr uint16_t    kHaPortDefault       = 443;   // Nabu Casa cloud HTTPS
+constexpr const char* kOpenclawHostDefault = "lobsterboy.tail1c66ec.ts.net";
+constexpr uint16_t    kOpenclawPortDefault = 443;   // Tailscale-issued cert
+
+// Per-probe timeouts. Tier re-check runs at most this often from
+// loop()-driven polling — keep them tight so a single tier-check pass stays
+// under ~6s end-to-end and the FSM doesn't stutter audibly.
+constexpr uint32_t kHaProbeMs       = 2000;
+constexpr uint32_t kOpenclawProbeMs = 3000;
+constexpr uint32_t kTierRecheckMs   = 30000;
+
 // ── Display regions (CoreS3 320×240, see hal/Display.cpp) ─────────────────
 // Region geometry is duplicated as anonymous-namespace constants in
 // hal/Display.cpp. Display owns the rendering; this header just exposes the

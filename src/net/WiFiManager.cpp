@@ -1,13 +1,21 @@
 #include "WiFiManager.h"
 
 #include <WiFi.h>
+#include <WiFiClient.h>
 #include <WiFiMulti.h>
 
 #include "../app/NVSConfig.h"
+#include "../config.h"
 
 namespace jarvis::net {
 
 static WiFiMulti g_wifi;
+
+// Tier cache. Re-probed at most every kTierRecheckMs. Initialized to OFFLINE
+// so any call before begin() reports the correct state.
+static ConnectivityTier g_tier_cached      = ConnectivityTier::OFFLINE;
+static uint32_t         g_tier_checked_at  = 0;
+static bool             g_tier_have_sample = false;
 
 static const char* authName(wifi_auth_mode_t a) {
     switch (a) {
@@ -120,5 +128,67 @@ bool WiFiManager::begin(uint32_t connectTimeoutMs) {
 bool   WiFiManager::isConnected() { return WiFi.status() == WL_CONNECTED; }
 String WiFiManager::getIP()       { return WiFi.localIP().toString(); }
 int    WiFiManager::getRSSI()     { return WiFi.RSSI(); }
+
+const char* tierName(ConnectivityTier t) {
+    switch (t) {
+        case ConnectivityTier::LAN:          return "LAN";
+        case ConnectivityTier::TAILSCALE:    return "TS";
+        case ConnectivityTier::HOTSPOT_ONLY: return "HOT";
+        case ConnectivityTier::OFFLINE:      return "OFF";
+    }
+    return "?";
+}
+
+bool WiFiManager::isReachable(const char* host, uint16_t port, uint32_t timeoutMs) {
+    WiFiClient c;
+    // ESP32's WiFiClient::connect(host, port, timeoutMs) is in milliseconds
+    // despite the bare integer signature. Treat the result as definitive —
+    // if it fails, the host is not reachable on TCP at this port.
+    bool ok = c.connect(host, port, timeoutMs);
+    c.stop();
+    return ok;
+}
+
+void WiFiManager::invalidateTierCache() {
+    g_tier_have_sample = false;
+}
+
+ConnectivityTier WiFiManager::getConnectivityTier() {
+    // Cache hit?
+    if (g_tier_have_sample &&
+        (millis() - g_tier_checked_at) < jarvis::config::kTierRecheckMs) {
+        return g_tier_cached;
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        g_tier_cached      = ConnectivityTier::OFFLINE;
+        g_tier_checked_at  = millis();
+        g_tier_have_sample = true;
+        return g_tier_cached;
+    }
+
+    // Probe HA first — if it's reachable we're on a network with full
+    // backend access (LAN tier in PLAN.md's vocabulary covers this).
+    bool ha_ok = isReachable(jarvis::config::kHaHostDefault,
+                             jarvis::config::kHaPortDefault,
+                             jarvis::config::kHaProbeMs);
+    if (ha_ok) {
+        g_tier_cached = ConnectivityTier::LAN;
+    } else {
+        // HA unreachable. Try OpenClaw — Tailscale up but cloud routing
+        // for HA is broken (rare but possible on a phone hotspot blocking
+        // certain SNI hosts).
+        bool oc_ok = isReachable(jarvis::config::kOpenclawHostDefault,
+                                 jarvis::config::kOpenclawPortDefault,
+                                 jarvis::config::kOpenclawProbeMs);
+        g_tier_cached = oc_ok ? ConnectivityTier::TAILSCALE
+                              : ConnectivityTier::HOTSPOT_ONLY;
+    }
+
+    g_tier_checked_at  = millis();
+    g_tier_have_sample = true;
+    Serial.printf("[WIFI] tier=%s rssi=%d\n", tierName(g_tier_cached), WiFi.RSSI());
+    return g_tier_cached;
+}
 
 }  // namespace jarvis::net
