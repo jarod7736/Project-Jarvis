@@ -66,6 +66,38 @@ bool NVSConfig::setHaHost(const String& host) {
     return ok;
 }
 
+String NVSConfig::getOcKey() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("oc_key", "");
+    p.end();
+    return s;
+}
+
+bool NVSConfig::setOcKey(const String& key) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("oc_key", key) > 0;
+    p.end();
+    return ok;
+}
+
+String NVSConfig::getOcHost() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("oc_host", "");
+    p.end();
+    return s.length() ? s : String(jarvis::config::kOpenclawHostDefault);
+}
+
+bool NVSConfig::setOcHost(const String& host) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("oc_host", host) > 0;
+    p.end();
+    return ok;
+}
+
 // Apply a parsed JSON object to NVS. Each present key writes; absent keys
 // are skipped. Returns true if at least one key was applied. Logs every
 // applied key (without echoing secrets — token shows length only).
@@ -109,6 +141,33 @@ static bool applyProvisioningJson(const JsonDocument& doc) {
                 any = true;
             } else {
                 Serial.println("[PROV] Failed to write ha_host.");
+            }
+        }
+    }
+
+    JsonVariantConst ock = doc["oc_key"];
+    if (ock.is<const char*>()) {
+        String k = ock.as<String>();
+        if (k.length() && !k.equalsIgnoreCase("null")) {
+            if (NVSConfig::setOcKey(k)) {
+                Serial.printf("[PROV] Saved oc_key (%u chars, value not echoed)\n",
+                              (unsigned)k.length());
+                any = true;
+            } else {
+                Serial.println("[PROV] Failed to write oc_key.");
+            }
+        }
+    }
+
+    JsonVariantConst och = doc["oc_host"];
+    if (och.is<const char*>()) {
+        String h = och.as<String>();
+        if (h.length() && !h.equalsIgnoreCase("null")) {
+            if (NVSConfig::setOcHost(h)) {
+                Serial.printf("[PROV] Saved oc_host=\"%s\"\n", h.c_str());
+                any = true;
+            } else {
+                Serial.println("[PROV] Failed to write oc_host.");
             }
         }
     }

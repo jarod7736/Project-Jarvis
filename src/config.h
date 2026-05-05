@@ -60,6 +60,21 @@ constexpr uint16_t    kHaPortDefault       = 443;   // Nabu Casa cloud HTTPS
 constexpr const char* kOpenclawHostDefault = "lobsterboy.tail1c66ec.ts.net";
 constexpr uint16_t    kOpenclawPortDefault = 443;   // Tailscale-issued cert
 
+// ── OpenClaw model routing (PLAN.md Phase 6) ──────────────────────────────
+// PLAN.md uses placeholder names; real model IDs come from the OpenClaw
+// install. The user can override at runtime via NVS-set defaults if these
+// names don't match their install.
+constexpr const char* kOcLocalModel  = "qwen2.5-7b-instruct";
+constexpr const char* kOcClaudeModel = "claude-sonnet-4-6";
+
+// HTTP timeout for the OpenClaw call. PLAN.md says 10s; the Tailscale
+// network adds a small margin to that.
+constexpr uint32_t kOcHttpTimeoutMs = 12000;
+// Cap responses to a length that fits in TTS without dragging on. Matched
+// to PLAN.md's truncation guidance.
+constexpr int      kOcMaxTokens     = 150;
+constexpr size_t   kOcMaxReplyChars = 500;
+
 // Per-probe timeouts. Tier re-check runs at most this often from
 // loop()-driven polling — keep them tight so a single tier-check pass stays
 // under ~6s end-to-end and the FSM doesn't stutter audibly.

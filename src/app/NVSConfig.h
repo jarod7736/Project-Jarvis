@@ -28,6 +28,13 @@ public:
     static String getHaHost();
     static bool   setHaHost(const String& host);
 
+    // OpenClaw (Phase 6). Same security pattern as HA; `oc_host` falls back
+    // to config::kOpenclawHostDefault.
+    static String getOcKey();
+    static bool   setOcKey(const String& key);
+    static String getOcHost();
+    static bool   setOcHost(const String& host);
+
     // Blocks reading USB Serial up to `timeoutMs` for a single JSON line.
     // The provisioning JSON is a bag of optional fields:
     //   {"ssid":"...", "pass":"...", "ha_token":"...", "ha_host":"..."}

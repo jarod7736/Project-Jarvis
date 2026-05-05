@@ -4,6 +4,7 @@
 
 #include "../config.h"
 #include "../hal/LLMModule.h"
+#include "../net/LLMClient.h"
 #include "../net/WiFiManager.h"
 #include "CommandHandler.h"
 
@@ -125,7 +126,8 @@ const char* classifyByKeyword(const String& lc) {
 }
 
 RouteResult dispatchByIntent(const String& transcript, const String& intent,
-                             const String& entity, const String& query) {
+                             const String& entity, const String& query,
+                             jarvis::net::ConnectivityTier tier) {
     if (intent == "ha_command" || intent == "ha_query") {
         // Use CommandHandler for entity resolution — Qwen's entity field
         // is at best a hint; the keyword table is what maps to the user's
@@ -138,8 +140,20 @@ RouteResult dispatchByIntent(const String& transcript, const String& intent,
         return handleOnDevice(query.length() ? query : transcript);
     }
     if (intent == "local_llm" || intent == "claude") {
-        // Phase 6 lands the OpenClaw client.
-        return {false, String("Phase 6 will let me answer that.")};
+        // Phase 6: dispatch to OpenClaw. Tier-gate first — Tailscale-only
+        // backend, so OFFLINE/HOTSPOT_ONLY can't reach it.
+        if (tier == jarvis::net::ConnectivityTier::OFFLINE) {
+            return {false, String(jarvis::config::kErrNoNetwork)};
+        }
+        const char* model = (intent == "claude")
+                                ? jarvis::config::kOcClaudeModel
+                                : jarvis::config::kOcLocalModel;
+        String reply = jarvis::net::LLMClient::query(
+            query.length() ? query : transcript, model);
+        if (reply.length() == 0) {
+            return {false, String(jarvis::config::kErrLlmTimeout)};
+        }
+        return {true, reply};
     }
     return {false, String(jarvis::config::kErrIntentParse)};
 }
@@ -147,7 +161,8 @@ RouteResult dispatchByIntent(const String& transcript, const String& intent,
 // Fall-through path when LLM is unavailable or JSON parsing fails. Try
 // keyword classification first; on miss, try CommandHandler's table
 // directly (catches phrasings the keyword classifier doesn't).
-RouteResult fallbackToKeyword(const String& transcript) {
+RouteResult fallbackToKeyword(const String& transcript,
+                              jarvis::net::ConnectivityTier tier) {
     String lc = transcript;
     lc.toLowerCase();
     const char* intent = classifyByKeyword(lc);
@@ -160,7 +175,7 @@ RouteResult fallbackToKeyword(const String& transcript) {
         return {false, String(jarvis::config::kErrIntentParse)};
     }
     Serial.printf("[IntentRouter] keyword classified as %s\n", intent);
-    return dispatchByIntent(transcript, String(intent), String(), String());
+    return dispatchByIntent(transcript, String(intent), String(), String(), tier);
 }
 
 }  // namespace
@@ -194,14 +209,14 @@ RouteResult route(const String& transcript, jarvis::net::ConnectivityTier tier) 
                 String query  = doc["query"].as<String>();
                 if (intent.length() > 0) {
                     Serial.printf("[IntentRouter] qwen intent=%s\n", intent.c_str());
-                    return dispatchByIntent(transcript, intent, entity, query);
+                    return dispatchByIntent(transcript, intent, entity, query, tier);
                 }
             }
             Serial.println("[IntentRouter] Qwen output unparseable, using keywords");
         }
     }
 
-    return fallbackToKeyword(transcript);
+    return fallbackToKeyword(transcript, tier);
 }
 
 }  // namespace jarvis::app
