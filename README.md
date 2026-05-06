@@ -17,6 +17,8 @@ Think: a personal Jarvis that lives on your desk or shelf, works offline for sim
 
 The LLM Module stacks directly onto the CoreS3 via M5Bus. UART communication at 115200bps 8N1 using JSON packets. Arduino library: `M5Module-LLM`.
 
+The CoreS3 includes a built-in 500mAh LiPo battery and an AXP2101 power management IC. Battery level and charging state are exposed through `M5.Power.getBatteryLevel()` and `M5.Power.isCharging()` in the M5Unified library, which the firmware uses to drive the on-screen power indicator.
+
 -----
 
 ## Architecture
@@ -84,6 +86,7 @@ HA long-lived token also stored in NVS.
 
 - ASR transcript — show what it heard
 - Status indicator — Listening / Thinking / Speaking
+- Battery indicator — battery level (percentage or icon) plus a charging-state glyph (e.g. lightning bolt when on USB power, plain icon on battery). Polled from the AXP2101 every few seconds via M5Unified.
 - Readable data — temperatures, entity states, timers
 - Animation/waveform during TTS playback
 
@@ -106,6 +109,7 @@ HA long-lived token also stored in NVS.
 - [ ] Tune ASR sensitivity for target environment
 - [ ] Display ASR transcript on CoreS3 screen
 - [ ] Add status indicators (listening/thinking/speaking states)
+- [x] Add battery level and charging-state indicator to the display (read AXP2101 via `M5.Power`; refresh on a timer; low-battery warning threshold)
 
 ### Phase 3 — WiFi & Basic Connectivity
 

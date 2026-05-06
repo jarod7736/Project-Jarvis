@@ -17,6 +17,7 @@
 #include "config.h"
 #include "hal/Display.h"
 #include "hal/LLMModule.h"
+#include "hal/SdLogger.h"
 #include "net/HAClient.h"
 #include "net/LLMClient.h"
 #include "net/WiFiManager.h"
@@ -29,6 +30,52 @@ jarvis::hal::LLMModule g_module;
 jarvis::net::ConnectivityTier g_last_tier = jarvis::net::ConnectivityTier::OFFLINE;
 int                            g_last_rssi = 0;
 uint32_t                       g_last_footer_ms = 0;
+
+// Battery indicator state — polled from AXP2101 via M5.Power. Polling
+// budget is set low because the IC is on i2c and the call is cheap, but
+// we still throttle to avoid pointless redraws. Flips can happen at any
+// time (USB plug/unplug) so unlike the footer we don't gate on IDLE.
+int      g_last_batt_level    = -2;  // sentinel for "never rendered"
+bool     g_last_batt_charging = false;
+uint32_t g_last_batt_ms       = 0;
+constexpr uint32_t kBatteryPollMs = 5000;
+
+void refreshBattery() {
+    if (millis() - g_last_batt_ms < kBatteryPollMs) return;
+    g_last_batt_ms = millis();
+    int  level     = M5.Power.getBatteryLevel();    // -1 if unknown, else 0..100
+    bool charging  = M5.Power.isCharging();
+    int  v_mv      = M5.Power.getBatteryVoltage();  // mV; useful when level=-1
+    int  vbus_mv   = M5.Power.getVBUSVoltage();     // -1 if unsupported
+
+    // If the SOC counter hasn't initialized yet (returns -1) but we have a
+    // valid voltage reading, fall back to a crude voltage→percent map. The
+    // AXP2101 fuel gauge needs a few seconds of i2c traffic to produce a
+    // real SOC, and on CoreS3 it sometimes wedges at -1 indefinitely after
+    // a USB-powered boot. 4.20V = 100%, 3.30V = 0%, linear in between.
+    if (level < 0 && v_mv >= 3300) {
+        if (v_mv >= 4200) level = 100;
+        else              level = ((v_mv - 3300) * 100) / (4200 - 3300);
+    }
+
+    // AXP2101 reports isCharging()=false at 100% because it stops actively
+    // pushing current into a full cell — but the device is still plugged
+    // in and the user expects a "powered" indicator. Treat VBUS > 4.5V as
+    // "on USB" and force the bolt on. -1 vbus = the chip can't tell us,
+    // so we trust isCharging() alone in that case.
+    bool on_usb = (vbus_mv >= 4500);
+    bool show_bolt = charging || on_usb;
+
+    bool changed = (level != g_last_batt_level) || (show_bolt != g_last_batt_charging);
+    if (changed) {
+        Serial.printf("[Power] level=%d charging=%d v=%dmV vbus=%dmV bolt=%d\n",
+                      level, (int)charging, v_mv, vbus_mv, (int)show_bolt);
+    }
+    if (!changed) return;
+    g_last_batt_level    = level;
+    g_last_batt_charging = show_bolt;
+    jarvis::hal::Display::updateBattery(level, show_bolt);
+}
 
 // Refresh the footer's tier/rssi line. Cheap when tier is cached; the
 // underlying probe can take 2-5s so we only call this from IDLE so it
@@ -61,7 +108,20 @@ void setup() {
     Serial.println();
     Serial.println("=== Project Jarvis — Phase 2 voice loop ===");
 
+    // Power-stack sanity: if the AXP2101 isn't being driven by M5Unified
+    // (board mis-detected, i2c bus busy, etc.) all our M5.Power calls
+    // silently return defaults. Log once at boot so it's obvious.
+    Serial.printf("[Power] board=%d batt_level=%d v_mv=%d charging=%d\n",
+                  (int)M5.getBoard(),
+                  (int)M5.Power.getBatteryLevel(),
+                  (int)M5.Power.getBatteryVoltage(),
+                  (int)M5.Power.isCharging());
+
     jarvis::hal::Display::begin();
+
+    // SD logger: best-effort. Mount failure (no card / unformatted) is
+    // logged once and silently ignored thereafter — voice loop still runs.
+    jarvis::hal::SdLogger::begin();
 
     // Phase 3: WiFi bring-up first. NVS-backed creds; first-run provisioning
     // over USB Serial JSON. OFFLINE on failure — voice loop still runs so the
@@ -123,4 +183,5 @@ void loop() {
     g_module.update();
     jarvis::app::tickStateMachine();
     refreshFooterIfIdle();
+    refreshBattery();
 }

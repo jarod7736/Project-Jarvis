@@ -29,6 +29,12 @@ public:
     // Redraw footer: tier string ("LAN"/"TS"/"HOT"/"OFF"), RSSI, wall-clock.
     // Call every 30s from loop(); also call on connect/disconnect events.
     static void updateFooter(const String& tier, int rssi);
+
+    // Top-right corner of the status bar: battery icon + percentage. Cached
+    // so setStatus() can repaint it (fillRect wipes the bar). Call from
+    // loop() on a timer; values are clamped 0..100. `level` < 0 means
+    // "unknown" — the icon is drawn empty and the text shows "--%".
+    static void updateBattery(int level, bool charging);
 };
 
 }  // namespace jarvis::hal

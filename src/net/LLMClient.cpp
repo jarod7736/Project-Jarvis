@@ -36,6 +36,88 @@ String stripThinkingMarkers(const String& s) {
     return out;
 }
 
+// Heuristic: gemma-4-e4b emits a meta preamble before (or instead of) the
+// answer — sentences narrating the model's own reasoning. Drop leading
+// sentences that match any of these markers; keep from the first non-meta
+// sentence on. If everything is meta, return the original (speaking
+// awkward text beats speaking nothing).
+bool startsWithMeta(const String& sentence) {
+    String s = sentence;
+    s.trim();
+    if (s.length() == 0) return true;
+    String head = s.substring(0, s.length() < 48 ? s.length() : 48);
+    head.toLowerCase();
+    // Generic prefixes catch most gemma-4-e4b inner-monologue patterns.
+    // "the user " covers all of: asking, wants, asked, provided, said,
+    // gave, input, has, is, etc. without the brittle list of inflections.
+    // Same for "i " (followed by a planning verb).
+    static const char* markers[] = {
+        "the user ",           "the input ",         "the question ",
+        "the prompt ",         "the response should","the answer should",
+        "i need to",           "i should",           "i must",
+        "i am processing",     "i am to",            "i'll ",
+        "i will ",             "i can ",             "i'm going to",
+        "i already",           "i'm just",
+        "since the input",     "since the user",     "given the user",
+        "given that",          "let me analyze",     "let me think",
+        "okay, the user",      "okay,",              "alright,",
+        "first, i",            "to answer this",     "to address this",
+        "my function is",      "my purpose is",      "my role is",
+        "as jarvis,",          "this requires",      "based on the user",
+        "based on the input",
+    };
+    for (auto* m : markers) {
+        if (head.startsWith(m)) return true;
+    }
+    return false;
+}
+
+// Walk every sentence and keep only the non-meta ones. gemma-4-e4b
+// sometimes interleaves analysis with the answer ("I already explained it
+// correctly. I should give a concise version. <actual answer>"), so
+// stripping just the preamble leaves enough garbage to ruin the spoken
+// reply. This is the broader "drop meta wherever it appears" pass.
+String stripMetaPreamble(const String& s) {
+    if (s.length() == 0) return s;
+    String out;
+    out.reserve(s.length());
+    int start = 0;
+    auto flush_sentence = [&](int end) {
+        if (end <= start) return;
+        String sentence = s.substring(start, end);
+        if (!startsWithMeta(sentence)) {
+            if (out.length()) out += ' ';
+            String trimmed = sentence;
+            trimmed.trim();
+            out += trimmed;
+        }
+    };
+    for (int i = 0; i < (int)s.length(); ++i) {
+        char c = s[i];
+        if (c == '.' || c == '!' || c == '?') {
+            int end = i + 1;
+            flush_sentence(end);
+            // Skip whitespace after terminator so the next sentence's
+            // start position is clean.
+            while (end < (int)s.length() && (s[end] == ' ' || s[end] == '\n')) ++end;
+            start = end;
+            i = end - 1;
+        }
+    }
+    // Trailing fragment without terminator (rare in normal text but
+    // possible if the response was truncated mid-sentence).
+    if (start < (int)s.length()) flush_sentence(s.length());
+
+    out.trim();
+    if (out.length() == 0) {
+        // Every sentence in the response was meta — the model never gave
+        // an actual answer. Speak a graceful fallback instead of empty
+        // silence (user gets confused) or the inner monologue.
+        return String("Sorry, I didn't quite catch that. Try again?");
+    }
+    return out;
+}
+
 // Truncate `s` to at most `maxChars`, preferring the last sentence boundary
 // (. ? !) before that limit. If no boundary in range, hard-cut at maxChars.
 // Voice pacing means a half-sentence is much worse than a clipped paragraph.
@@ -110,20 +192,29 @@ String LLMClient::query(const String& userPrompt, const char* model) {
         auto messages     = req["messages"].to<JsonArray>();
         auto sys = messages.add<JsonObject>();
         sys["role"]    = "system";
-        sys["content"] = "You are Jarvis, a concise voice assistant. Reply "
-                         "directly in 1-3 sentences. Plain prose only — no "
-                         "lists, no markdown, no headers, no meta commentary, "
-                         "no analysis of the question.";
-        // Few-shot anchor — gemma-4 ignores the system prompt's "no meta"
-        // instruction on its own, but follows the format from a concrete
-        // example. One shot is enough to suppress the bullet-list/analysis
-        // pattern.
-        auto ex_u = messages.add<JsonObject>();
-        ex_u["role"]    = "user";
-        ex_u["content"] = "what's the capital of france";
-        auto ex_a = messages.add<JsonObject>();
-        ex_a["role"]    = "assistant";
-        ex_a["content"] = "Paris is the capital of France.";
+        // Drastically simplified system prompt. The longer version made
+        // gemma-4-e4b deliberate ABOUT the prompt itself ("the response
+        // format is...", "I should respect all constraints..."). Short
+        // prompts give thinking models less to chew on.
+        sys["content"] = "Reply in one short spoken sentence. No analysis.";
+        // Two tight few-shot anchors. More than that fed gemma's tendency
+        // to model the "format" as a topic. These are deliberately plain:
+        // the assistant message is a direct sentence with no preamble.
+        struct Shot { const char* u; const char* a; };
+        static const Shot shots[] = {
+            {"what's the capital of france", "Paris is the capital of France."},
+            {"explain photosynthesis",
+             "Plants use sunlight, water, and carbon dioxide to make sugar "
+             "and release oxygen."},
+        };
+        for (auto& s : shots) {
+            auto eu = messages.add<JsonObject>();
+            eu["role"]    = "user";
+            eu["content"] = s.u;
+            auto ea = messages.add<JsonObject>();
+            ea["role"]    = "assistant";
+            ea["content"] = s.a;
+        }
 
         auto usr = messages.add<JsonObject>();
         usr["role"]    = "user";
@@ -163,12 +254,14 @@ String LLMClient::query(const String& userPrompt, const char* model) {
         return String();
     }
 
-    String stripped = stripThinkingMarkers(content);
-    String trimmed  = sentenceBoundaryTruncate(stripped, jarvis::config::kOcMaxReplyChars);
-    Serial.printf("[LLMClient] -> %u chars (raw=%u, post-strip=%u)\n",
+    String stripped  = stripThinkingMarkers(content);
+    String demeta    = stripMetaPreamble(stripped);
+    String trimmed   = sentenceBoundaryTruncate(demeta, jarvis::config::kOcMaxReplyChars);
+    Serial.printf("[LLMClient] -> %u chars (raw=%u, post-think=%u, post-meta=%u)\n",
                   (unsigned)trimmed.length(),
                   (unsigned)content.length(),
-                  (unsigned)stripped.length());
+                  (unsigned)stripped.length(),
+                  (unsigned)demeta.length());
     return trimmed;
 }
 
