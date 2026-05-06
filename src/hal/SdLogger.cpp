@@ -9,12 +9,15 @@ namespace jarvis::hal {
 
 namespace {
 
-// Dedicated SPI instance — see CLAUDE.md SPI-conflict rule. Re-using the
-// display's HSPI/VSPI handle has a habit of corrupting one or the other
-// after a bus arbitration glitch. Cheap insurance to give SD its own.
-SPIClass g_spi(HSPI);
-bool     g_ok = false;
-bool     g_attempted = false;
+// Use the GLOBAL `SPI` instance, not a fresh SPIClass(HSPI). On ESP32-S3
+// HSPI maps to the same SPI host that M5GFX uses for the CoreS3 display,
+// so allocating a new bus there freezes the screen the moment SD.begin()
+// runs. M5Stack's own examples/Basic/sdcard/sdcard.ino uses `SPI` and
+// lets the Arduino SPI library arbitrate between SD and display via
+// beginTransaction(). Same pins (35/36/37/4), one shared host, no
+// freeze.
+bool g_ok = false;
+bool g_attempted = false;
 
 constexpr const char* kLogPath = "/jarvis.log";
 
@@ -52,12 +55,15 @@ bool SdLogger::begin() {
     g_attempted = true;
 
     using namespace jarvis::config;
-    g_spi.begin(kSdSck, kSdMiso, kSdMosi, kSdCs);
+    // Share the global SPI host with M5GFX. Beginning here re-pins the
+    // bus to SD's pin set; the bus stays alive but Arduino SPI handles
+    // per-transaction reconfiguration so the display still works.
+    SPI.begin(kSdSck, kSdMiso, kSdMosi, kSdCs);
 
     // 25 MHz is the safe default for CoreS3's SD slot; 40 MHz works on
     // some cards but isn't worth the marginal speed for our line-at-a-
     // time workload.
-    if (!SD.begin(kSdCs, g_spi, 25000000)) {
+    if (!SD.begin(kSdCs, SPI, 25000000)) {
         Serial.println("[SdLogger] SD.begin failed (no card / unformatted?) — logging disabled");
         g_ok = false;
         return false;
