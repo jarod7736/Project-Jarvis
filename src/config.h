@@ -117,6 +117,15 @@ constexpr uint32_t kTtsHttpTimeoutMs = 15000;
 // 24 kbps; 120 KB gives ~40 s headroom for verbose Claude replies.
 constexpr size_t   kTtsMaxMp3Bytes   = 120 * 1024;
 
+// ── Hardware watchdog (PLAN.md Phase 7) ───────────────────────────────────
+// 30 s timeout. Generous on purpose: a normal voice cycle is 1–6 s end to
+// end, but cloud TTS+LLM can stretch to 10+ s on a slow link. The watchdog
+// is the safety net for genuine hangs (UART deadlock, HTTPClient leak with
+// the lib's own timeout disabled), not a per-call deadline. loop()'s
+// watchdog reset fires every iteration so anything that returns control
+// to loop() — even slowly — keeps us fed.
+constexpr uint32_t kWatchdogTimeoutSec = 30;
+
 // Per-probe timeouts. Tier re-check runs at most this often from
 // loop()-driven polling — keep them tight so a single tier-check pass stays
 // under ~6s end-to-end and the FSM doesn't stutter audibly.

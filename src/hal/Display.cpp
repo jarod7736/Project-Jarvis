@@ -41,6 +41,25 @@ namespace {
     constexpr int BATT_PCT_W  = 4 * 6;  // 24
     constexpr int BATT_PCT_X  = BATT_BODY_X - 4 - BATT_PCT_W;
     constexpr int BATT_PCT_Y  = STATUS_Y + (STATUS_H - 8) / 2;
+
+    // SPEAKING-state waveform animation. A 30 px band at the bottom of
+    // the response region, drawn as a continuous oscilloscope-style
+    // waveform: many points across the width, connected by line
+    // segments, each point jittered around the centerline. Looks more
+    // like audio than the original 5-bar bargraph.
+    constexpr int WAVE_H         = 30;
+    constexpr int WAVE_Y         = RESP_Y + RESP_H - WAVE_H;  // bottom of response
+    constexpr int WAVE_MID       = WAVE_Y + WAVE_H / 2;
+    // Number of sample points across the screen. 64 = ~5 px between
+    // points on the 320 px display — fluid enough that the line looks
+    // continuous, sparse enough that fillRect cost stays trivial.
+    constexpr int WAVE_POINTS    = 64;
+    constexpr int WAVE_DX        = SCR_W / WAVE_POINTS;
+    // Max excursion from the centerline. ±13 px keeps the waveform
+    // visually inside the 30 px band with a 1 px margin top/bottom.
+    constexpr int WAVE_AMPLITUDE = (WAVE_H / 2) - 2;
+    // Refresh cadence — 10 Hz looks fluid without burning bus time.
+    constexpr uint32_t WAVE_FRAME_MS = 100;
 }
 
 // ── Per-state colours and labels ─────────────────────────────────────────────
@@ -66,6 +85,14 @@ namespace {
     DeviceState g_current_state    = DeviceState::IDLE;
     int         g_battery_level    = -1;
     bool        g_battery_charging = false;
+
+    // Waveform animation state. `g_wave_was_speaking` lets tickWaveform()
+    // detect the SPEAKING→other transition and erase exactly once.
+    bool      g_wave_was_speaking = false;
+    uint32_t  g_wave_last_frame_ms = 0;
+    // Tiny PRNG seed advanced per-bar per-frame. xorshift32 is fine for
+    // visual jitter — we just want non-repeating bar heights.
+    uint32_t  g_wave_seed         = 0x1234ABCD;
 
     // Paint the battery indicator into the status bar using the current
     // state's bg/fg. Called from setStatus() (after fillRect) and
@@ -151,6 +178,56 @@ void Display::setStatus(DeviceState state) {
 
     // fillRect wiped the battery region — repaint with cached values.
     drawBattery();
+}
+
+void Display::tickWaveform() {
+    bool speaking = (g_current_state == DeviceState::SPEAKING);
+
+    // Edge case: speaking → not speaking. Erase the strip back to black
+    // exactly once, then leave it alone until the next SPEAKING entry.
+    if (g_wave_was_speaking && !speaking) {
+        M5.Display.fillRect(0, WAVE_Y, SCR_W, WAVE_H, TFT_BLACK);
+        g_wave_was_speaking = false;
+        return;
+    }
+    if (!speaking) return;
+
+    // Throttle to ~10 Hz. millis() wraparound is harmless because we
+    // compare with subtraction (uint32_t arithmetic).
+    uint32_t now = millis();
+    if (g_wave_was_speaking && (now - g_wave_last_frame_ms) < WAVE_FRAME_MS) {
+        return;
+    }
+    g_wave_last_frame_ms = now;
+    g_wave_was_speaking  = true;
+
+    // xorshift32 — cheap and chaotic enough for waveform jitter.
+    auto rand32 = [](uint32_t& s) {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        return s;
+    };
+
+    // Wipe the band, then draw connected line segments across the
+    // width. Each point's Y is centerline ± a random offset; drawing
+    // line(prev, curr) gives a continuous oscilloscope-style trace.
+    M5.Display.fillRect(0, WAVE_Y, SCR_W, WAVE_H, TFT_BLACK);
+
+    int prev_x = 0;
+    uint32_t r0 = rand32(g_wave_seed);
+    int prev_y = WAVE_MID + (int)((r0 % (uint32_t)(WAVE_AMPLITUDE * 2 + 1))) - WAVE_AMPLITUDE;
+
+    for (int i = 1; i <= WAVE_POINTS; ++i) {
+        int x = i * WAVE_DX;
+        if (x >= SCR_W) x = SCR_W - 1;
+        uint32_t r = rand32(g_wave_seed);
+        int y = WAVE_MID
+              + (int)((r % (uint32_t)(WAVE_AMPLITUDE * 2 + 1))) - WAVE_AMPLITUDE;
+        M5.Display.drawLine(prev_x, prev_y, x, y, TFT_GREEN);
+        prev_x = x;
+        prev_y = y;
+    }
 }
 
 void Display::updateBattery(int level, bool charging) {
