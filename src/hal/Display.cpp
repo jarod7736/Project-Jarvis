@@ -42,6 +42,17 @@ namespace {
     constexpr int BATT_PCT_X  = BATT_BODY_X - 4 - BATT_PCT_W;
     constexpr int BATT_PCT_Y  = STATUS_Y + (STATUS_H - 8) / 2;
 
+    // WiFi indicator: 3-bar signal icon in the status bar. Sits to the
+    // left of the battery percent text so the right side reads
+    // "wifi-bars 87% [bat]". Compact — a 16×16 region.
+    constexpr int WIFI_BAR_W  = 4;
+    constexpr int WIFI_BAR_GAP = 2;
+    constexpr int WIFI_BARS    = 3;
+    constexpr int WIFI_W       = WIFI_BARS * WIFI_BAR_W + (WIFI_BARS - 1) * WIFI_BAR_GAP;
+    constexpr int WIFI_H       = 14;  // tallest bar
+    constexpr int WIFI_X       = BATT_PCT_X - WIFI_W - 6;  // 6px gap from "100%"
+    constexpr int WIFI_Y       = STATUS_Y + (STATUS_H - WIFI_H) / 2;
+
     // SPEAKING-state waveform animation. A 30 px band at the bottom of
     // the response region, drawn as a continuous oscilloscope-style
     // waveform: many points across the width, connected by line
@@ -85,6 +96,11 @@ namespace {
     DeviceState g_current_state    = DeviceState::IDLE;
     int         g_battery_level    = -1;
     bool        g_battery_charging = false;
+    // WiFi state cached by updateFooter() so setStatus() can repaint the
+    // signal-bar icon after fillRect wipes the status bar. tier is the
+    // string handed in by main.cpp ("LAN"/"TS"/"HOT"/"OFF"/"...").
+    String      g_wifi_tier        = "...";
+    int         g_wifi_rssi        = 0;
 
     // Waveform animation state. `g_wave_was_speaking` lets tickWaveform()
     // detect the SPEAKING→other transition and erase exactly once.
@@ -93,6 +109,61 @@ namespace {
     // Tiny PRNG seed advanced per-bar per-frame. xorshift32 is fine for
     // visual jitter — we just want non-repeating bar heights.
     uint32_t  g_wave_seed         = 0x1234ABCD;
+
+    // Paint the wifi signal-bar icon. Three vertical bars of ascending
+    // height. Filled bars = signal strength (3 strong / 2 medium / 1
+    // weak / 0 offline-or-connecting). Colour:
+    //   "OFF"  → red (offline)
+    //   "..."  → yellow (connecting/probing)
+    //   else   → green or fg colour (connected, tier=LAN/TS/HOT)
+    // Outline drawn for empty bars so the icon shape is always readable
+    // against any state-bar background.
+    void drawWifi() {
+        const StateStyle& s = kStyles[static_cast<int>(g_current_state)];
+        const uint16_t bg = s.bg;
+        const uint16_t fg = s.fg;
+
+        bool offline    = g_wifi_tier.equalsIgnoreCase("OFF");
+        bool connecting = g_wifi_tier.equals("...") || g_wifi_tier.length() == 0;
+
+        // Map RSSI to filled-bar count. Defaults: -55 dBm = 3, -70 = 2,
+        // anything weaker = 1. RSSI of 0 dBm is the "no reading" sentinel.
+        int filled;
+        if (offline)         filled = 0;
+        else if (connecting) filled = 0;  // animate later if needed
+        else if (g_wifi_rssi == 0)   filled = 1;
+        else if (g_wifi_rssi >= -55) filled = 3;
+        else if (g_wifi_rssi >= -70) filled = 2;
+        else                         filled = 1;
+
+        uint16_t fill_color =
+            offline    ? TFT_RED :
+            connecting ? TFT_YELLOW :
+            fg;
+
+        for (int i = 0; i < WIFI_BARS; ++i) {
+            int bar_h = (i + 1) * (WIFI_H / WIFI_BARS);
+            int x     = WIFI_X + i * (WIFI_BAR_W + WIFI_BAR_GAP);
+            int y     = WIFI_Y + (WIFI_H - bar_h);  // bottom-aligned
+
+            if (i < filled) {
+                M5.Display.fillRect(x, y, WIFI_BAR_W, bar_h, fill_color);
+            } else {
+                // Outline only for empty bars — keeps the icon's shape
+                // visible at "1 bar" or "offline" without it looking
+                // like the icon vanished.
+                uint16_t outline = offline ? TFT_RED : fg;
+                M5.Display.drawRect(x, y, WIFI_BAR_W, bar_h, outline);
+            }
+        }
+
+        // Diagonal red slash on the lowest bar when offline — distinct
+        // from a normal "1 bar" connected state.
+        if (offline) {
+            M5.Display.drawLine(WIFI_X, WIFI_Y + WIFI_H - 1,
+                                WIFI_X + WIFI_W - 1, WIFI_Y, TFT_RED);
+        }
+    }
 
     // Paint the battery indicator into the status bar using the current
     // state's bg/fg. Called from setStatus() (after fillRect) and
@@ -176,7 +247,9 @@ void Display::setStatus(DeviceState state) {
     M5.Display.setCursor(LBL_X, LBL_Y);
     M5.Display.print(s.label);
 
-    // fillRect wiped the battery region — repaint with cached values.
+    // fillRect wiped the right side of the bar — repaint cached
+    // wifi/battery indicators.
+    drawWifi();
     drawBattery();
 }
 
@@ -264,6 +337,17 @@ void Display::showResponse(const String& text) {
 }
 
 void Display::updateFooter(const String& tier, int rssi) {
+    // Cache and repaint the status-bar wifi icon. Wipe just the icon
+    // region (no need to redraw the whole bar) using the current state's
+    // bg colour, then drawWifi() repaints in the matching foreground.
+    g_wifi_tier = tier;
+    g_wifi_rssi = rssi;
+    {
+        const StateStyle& s = kStyles[static_cast<int>(g_current_state)];
+        M5.Display.fillRect(WIFI_X, STATUS_Y, WIFI_W, STATUS_H, s.bg);
+        drawWifi();
+    }
+
     M5.Display.fillRect(0, FOOT_Y, SCR_W, FOOT_H, TFT_BLACK);
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
