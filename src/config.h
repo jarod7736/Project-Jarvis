@@ -86,6 +86,37 @@ constexpr uint32_t kOcHttpTimeoutMs = 12000;
 constexpr int      kOcMaxTokens     = 80;
 constexpr size_t   kOcMaxReplyChars = 400;
 
+// ── Cloud TTS routing (PLAN.md Phase 7) ───────────────────────────────────
+// Defaults baked into config so a fresh device behaves identically to the
+// pre-Phase-7 build until the user provisions tts_api_key. The router in
+// LLMModule::speak() checks `tts_provider == "melotts"` || `tts_api_key`
+// is empty and falls through to the on-device melotts path in that case.
+constexpr const char* kTtsProviderDefault = "melotts";
+// Walken-adjacent presets per provider — see PLAN.md Phase 7 legal note
+// for why we don't ship a celebrity-clone voice ID. `onyx` is OpenAI's
+// deepest male voice and the closest stock match for the gravelly older-
+// male register without impersonating a specific person.
+constexpr const char* kTtsVoiceIdDefault = "onyx";
+constexpr const char* kTtsModelDefault   = "tts-1";
+
+// Cloud TTS endpoints. OpenAI is the cheapest path; ElevenLabs is the
+// quality+voice-variety path. Both speak HTTPS; both return a streamable
+// audio body. The router picks at request time based on tts_provider —
+// see net/TtsClient.cpp.
+constexpr const char* kTtsOpenAIHost     = "api.openai.com";
+constexpr const char* kTtsOpenAIPath     = "/v1/audio/speech";
+constexpr const char* kTtsElevenHost     = "api.elevenlabs.io";
+// Path is voice-suffixed at request time: "/v1/text-to-speech/<voice_id>"
+constexpr const char* kTtsElevenPathBase = "/v1/text-to-speech/";
+
+// 15 s total HTTP budget. Phase 7 streaming impl can chunk-download into
+// a ring buffer so playback starts before the full payload arrives, but
+// the buffered MVP just downloads the whole MP3 then plays.
+constexpr uint32_t kTtsHttpTimeoutMs = 15000;
+// Cap downloaded MP3 size to avoid runaway. ~30 KB ≈ 10 s of speech at
+// 24 kbps; 120 KB gives ~40 s headroom for verbose Claude replies.
+constexpr size_t   kTtsMaxMp3Bytes   = 120 * 1024;
+
 // Per-probe timeouts. Tier re-check runs at most this often from
 // loop()-driven polling — keep them tight so a single tier-check pass stays
 // under ~6s end-to-end and the FSM doesn't stutter audibly.

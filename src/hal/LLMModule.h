@@ -41,7 +41,18 @@ public:
     // Initiate TTS playback. Non-blocking. The on_speak_done callback fires
     // after a duration estimated from text length (real TTS-done detection
     // is a Phase 5/6 task).
+    //
+    // Phase 7: when the user has provisioned a cloud TTS provider, this
+    // first attempts cloud synthesis (net/TtsClient → AudioPlayer) and
+    // falls through to melotts on any error. The cloud path drives
+    // on_speak_done_ via finishSpeaking() once AudioPlayer's onPlayDone
+    // fires; melotts continues to use the millis()-based timer.
     void speak(const String& text);
+
+    // Public hook for the cloud-TTS path: AudioPlayer's onPlayDone wires
+    // through main.cpp to call this. Flips speaking_=false, fires
+    // on_speak_done_ once. Safe to call when not speaking.
+    void finishSpeaking();
 
     // Callback registration. Pattern: callbacks set flags only — they must
     // not transition state, call speak(), or block.

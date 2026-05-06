@@ -98,6 +98,70 @@ bool NVSConfig::setOcHost(const String& host) {
     return ok;
 }
 
+String NVSConfig::getTtsProvider() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("tts_provider", "");
+    p.end();
+    return s.length() ? s : String(jarvis::config::kTtsProviderDefault);
+}
+
+bool NVSConfig::setTtsProvider(const String& provider) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("tts_provider", provider) > 0;
+    p.end();
+    return ok;
+}
+
+String NVSConfig::getTtsVoiceId() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("tts_voice_id", "");
+    p.end();
+    return s.length() ? s : String(jarvis::config::kTtsVoiceIdDefault);
+}
+
+bool NVSConfig::setTtsVoiceId(const String& voiceId) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("tts_voice_id", voiceId) > 0;
+    p.end();
+    return ok;
+}
+
+String NVSConfig::getTtsApiKey() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("tts_api_key", "");
+    p.end();
+    return s;
+}
+
+bool NVSConfig::setTtsApiKey(const String& key) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("tts_api_key", key) > 0;
+    p.end();
+    return ok;
+}
+
+String NVSConfig::getTtsModel() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("tts_model", "");
+    p.end();
+    return s.length() ? s : String(jarvis::config::kTtsModelDefault);
+}
+
+bool NVSConfig::setTtsModel(const String& model) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("tts_model", model) > 0;
+    p.end();
+    return ok;
+}
+
 // Apply a parsed JSON object to NVS. Each present key writes; absent keys
 // are skipped. Returns true if at least one key was applied. Logs every
 // applied key (without echoing secrets — token shows length only).
@@ -169,6 +233,37 @@ static bool applyProvisioningJson(const JsonDocument& doc) {
             } else {
                 Serial.println("[PROV] Failed to write oc_host.");
             }
+        }
+    }
+
+    // Phase 7 cloud TTS keys. Same null-handling pattern as the others.
+    // The api_key is treated like the other secrets — length-only echo.
+    struct TtsField {
+        const char* json;
+        bool        secret;
+        bool      (*setter)(const String&);
+    };
+    static const TtsField tts_fields[] = {
+        {"tts_provider", false, &NVSConfig::setTtsProvider},
+        {"tts_voice_id", false, &NVSConfig::setTtsVoiceId},
+        {"tts_api_key",  true,  &NVSConfig::setTtsApiKey},
+        {"tts_model",    false, &NVSConfig::setTtsModel},
+    };
+    for (const auto& f : tts_fields) {
+        JsonVariantConst v = doc[f.json];
+        if (!v.is<const char*>()) continue;
+        String s = v.as<String>();
+        if (s.length() == 0 || s.equalsIgnoreCase("null")) continue;
+        if (f.setter(s)) {
+            if (f.secret) {
+                Serial.printf("[PROV] Saved %s (%u chars, value not echoed)\n",
+                              f.json, (unsigned)s.length());
+            } else {
+                Serial.printf("[PROV] Saved %s=\"%s\"\n", f.json, s.c_str());
+            }
+            any = true;
+        } else {
+            Serial.printf("[PROV] Failed to write %s.\n", f.json);
         }
     }
 

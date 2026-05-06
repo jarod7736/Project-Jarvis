@@ -35,6 +35,22 @@ public:
     static String getOcHost();
     static bool   setOcHost(const String& host);
 
+    // Cloud TTS (Phase 7). `tts_provider` is one of "openai", "eleven", or
+    // "melotts" (force-local). Empty/unset falls back to
+    // config::kTtsProviderDefault — currently "melotts" so existing
+    // devices behave unchanged. `tts_voice_id` and `tts_model` are
+    // provider-specific strings; the routing layer interprets them. The
+    // bearer token is held in `tts_api_key` and is never echoed back to
+    // the serial console (same security parity as ha_token / oc_key).
+    static String getTtsProvider();
+    static bool   setTtsProvider(const String& provider);
+    static String getTtsVoiceId();
+    static bool   setTtsVoiceId(const String& voiceId);
+    static String getTtsApiKey();
+    static bool   setTtsApiKey(const String& key);
+    static String getTtsModel();
+    static bool   setTtsModel(const String& model);
+
     // Blocks reading USB Serial up to `timeoutMs` for a single JSON line.
     // The provisioning JSON is a bag of optional fields:
     //   {"ssid":"...", "pass":"...", "ha_token":"...", "ha_host":"..."}
