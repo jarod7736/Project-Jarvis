@@ -17,6 +17,7 @@
 #include "config.h"
 #include "hal/Display.h"
 #include "hal/LLMModule.h"
+#include "hal/SdLogger.h"
 #include "net/HAClient.h"
 #include "net/LLMClient.h"
 #include "net/WiFiManager.h"
@@ -117,6 +118,10 @@ void setup() {
                   (int)M5.Power.isCharging());
 
     jarvis::hal::Display::begin();
+
+    // SD logger: best-effort. Mount failure (no card / unformatted) is
+    // logged once and silently ignored thereafter — voice loop still runs.
+    jarvis::hal::SdLogger::begin();
 
     // Phase 3: WiFi bring-up first. NVS-backed creds; first-run provisioning
     // over USB Serial JSON. OFFLINE on failure — voice loop still runs so the

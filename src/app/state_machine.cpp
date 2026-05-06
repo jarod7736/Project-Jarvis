@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "../config.h"
+#include "../hal/SdLogger.h"
 #include "../net/WiFiManager.h"
 #include "IntentRouter.h"
 
@@ -137,7 +138,12 @@ void tickStateMachine() {
                     // can't parse, so Phase 4 behavior is preserved as a
                     // safety net.
                     auto tier = jarvis::net::WiFiManager::getConnectivityTier();
+                    uint32_t t0 = millis();
                     RouteResult result = jarvis::app::route(final_text, tier);
+                    uint32_t latency_ms = millis() - t0;
+                    jarvis::hal::SdLogger::logExchange(
+                        final_text, result.spoken,
+                        jarvis::net::tierName(tier), latency_ms);
                     enterSpeaking(result.spoken);
                 }
             } else if ((int32_t)(millis() - g_listen_deadline_ms) >= 0) {
