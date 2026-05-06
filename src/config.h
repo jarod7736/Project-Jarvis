@@ -78,10 +78,13 @@ constexpr const char* kOcClaudeModel = "claude-sonnet-4-6";  // TBD
 // HTTP timeout for the OpenClaw call. PLAN.md says 10s; the Tailscale
 // network adds a small margin to that.
 constexpr uint32_t kOcHttpTimeoutMs = 12000;
-// Cap responses to a length that fits in TTS without dragging on. Matched
-// to PLAN.md's truncation guidance.
-constexpr int      kOcMaxTokens     = 150;
-constexpr size_t   kOcMaxReplyChars = 500;
+// Cap responses to a length that fits in TTS without dragging on. Lowered
+// from 150 → 80 tokens because gemma-4-e4b spends long contexts narrating
+// its own reasoning ("The user is asking... I should..."). Forcing it
+// short crowds out the inner monologue and leaves more room for an
+// actual answer per token spent.
+constexpr int      kOcMaxTokens     = 80;
+constexpr size_t   kOcMaxReplyChars = 400;
 
 // Per-probe timeouts. Tier re-check runs at most this often from
 // loop()-driven polling — keep them tight so a single tier-check pass stays

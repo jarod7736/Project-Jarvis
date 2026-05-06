@@ -70,7 +70,20 @@ void enterSpeaking(const String& text) {
 void stateMachineBegin(LLMModule* module) {
     g_module = module;
 
-    g_module->setOnWake([]() { g_kws_fired = true; });
+    g_module->setOnWake([]() {
+        // KWS fires can repeat (the user says "HELLO" twice, or the LLM
+        // Module's KWS daemon retriggers on a long wake utterance, or the
+        // device's own TTS plays "Hi" loud enough to feed back into the
+        // mic). Only honor wakes from IDLE — anything during an active
+        // session is noise. Without this, the stale flag leaks into the
+        // next IDLE and starts a phantom second LISTENING/SPEAKING pair,
+        // which the user hears as "Hi. Hi." back-to-back.
+        if (g_state == DeviceState::IDLE) {
+            g_kws_fired = true;
+        } else {
+            Serial.println("[FSM] KWS during non-IDLE — ignored");
+        }
+    });
 
     g_module->setOnTranscript([](const String& text, bool isFinal) {
         g_transcript        = text;

@@ -356,6 +356,7 @@ void LLMModule::update() {
 
     for (auto& m : module_->msg.responseMsgList) {
         if (kws_work_id_.length() && m.work_id == kws_work_id_) {
+            Serial.printf("[LLMModule] KWS event raw=%s\n", m.raw_msg.c_str());
             if (on_wake_) on_wake_();
             continue;
         }
@@ -391,6 +392,19 @@ void LLMModule::update() {
 
 void LLMModule::speak(const String& text) {
     if (!ready_) return;
+
+    // Guard against re-entry. The FSM should never call speak() while
+    // already SPEAKING — but if it ever does (callback flag race, partial
+    // tick), we want a single log line instead of two overlapping melotts
+    // inferences. Investigating "Hi twice on wake" — instrumenting first.
+    if (speaking_) {
+        Serial.printf("[LLMModule] speak() ignored — already speaking. "
+                      "incoming=\"%s\"\n", text.c_str());
+        return;
+    }
+
+    Serial.printf("[LLMModule] speak(\"%s\") len=%u\n",
+                  text.c_str(), (unsigned)text.length());
 
     if (melotts_work_id_.length() == 0) {
         // Phase 2 fallback: TTS unavailable — show on display, schedule
