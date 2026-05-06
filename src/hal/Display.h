@@ -35,6 +35,14 @@ public:
     // loop() on a timer; values are clamped 0..100. `level` < 0 means
     // "unknown" — the icon is drawn empty and the text shows "--%".
     static void updateBattery(int level, bool charging);
+
+    // Drive the SPEAKING-state waveform animation. Cheap when not
+    // speaking (single comparison); ~10 Hz redraw when active. Call
+    // every loop() iteration. Internally tracks the last setStatus()
+    // value so transitions out of SPEAKING erase the strip exactly
+    // once. Animation strip lives at the bottom of the response region
+    // — the response text above it stays visible.
+    static void tickWaveform();
 };
 
 }  // namespace jarvis::hal

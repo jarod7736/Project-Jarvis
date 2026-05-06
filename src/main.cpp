@@ -222,4 +222,5 @@ void loop() {
     jarvis::app::tickStateMachine();
     refreshFooterIfIdle();
     refreshBattery();
+    jarvis::hal::Display::tickWaveform();
 }
