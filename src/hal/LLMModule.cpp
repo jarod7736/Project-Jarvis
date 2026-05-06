@@ -3,8 +3,11 @@
 #include <ArduinoJson.h>
 #include <M5ModuleLLM.h>
 
+#include "../app/NVSConfig.h"
 #include "../config.h"
+#include "../net/TtsClient.h"
 #include "../prompts/intent_prompt.h"
+#include "AudioPlayer.h"
 
 namespace jarvis::hal {
 
@@ -406,6 +409,30 @@ void LLMModule::speak(const String& text) {
     Serial.printf("[LLMModule] speak(\"%s\") len=%u\n",
                   text.c_str(), (unsigned)text.length());
 
+    // Phase 7 cloud-TTS path. tts_provider != "melotts" + an api_key
+    // present + AudioPlayer ready = try cloud first. Failure on any
+    // step falls through to the melotts path below — no break in
+    // user-facing behavior.
+    String tts_provider = jarvis::NVSConfig::getTtsProvider();
+    if (!tts_provider.equalsIgnoreCase("melotts") &&
+        jarvis::net::TtsClient::isConfigured() &&
+        jarvis::hal::AudioPlayer::ok()) {
+        jarvis::net::Mp3Buffer mp3 = jarvis::net::TtsClient::synthesize(text);
+        if (!mp3.empty() && jarvis::hal::AudioPlayer::play(std::move(mp3))) {
+            // Speaking is now driven by AudioPlayer; speak_done_at_ms_
+            // gets a far-future sentinel so update()'s estimate-based
+            // fallback timer doesn't fire while audio is still playing.
+            // finishSpeaking() (wired via AudioPlayer::setOnPlayDone in
+            // main.cpp) flips us back to !speaking_ when the buffer
+            // drains.
+            speaking_         = true;
+            speak_done_at_ms_ = millis() + 60UL * 60UL * 1000UL;
+            Serial.println("[LLMModule] speak: cloud TTS in flight");
+            return;
+        }
+        Serial.println("[LLMModule] cloud TTS failed; falling back to melotts");
+    }
+
     if (melotts_work_id_.length() == 0) {
         // Phase 2 fallback: TTS unavailable — show on display, schedule
         // SPEAKING→IDLE on a short timer so the FSM still exercises the
@@ -430,6 +457,12 @@ void LLMModule::speak(const String& text) {
     speak_done_at_ms_ = millis()
                       + config::kSpeakBaseMs
                       + (uint32_t)body.length() * config::kSpeakMsPerChar;
+}
+
+void LLMModule::finishSpeaking() {
+    if (!speaking_) return;
+    speaking_ = false;
+    if (on_speak_done_) on_speak_done_();
 }
 
 }  // namespace jarvis::hal

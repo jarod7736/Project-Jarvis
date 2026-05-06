@@ -15,6 +15,7 @@
 #include "app/NVSConfig.h"
 #include "app/state_machine.h"
 #include "config.h"
+#include "hal/AudioPlayer.h"
 #include "hal/Display.h"
 #include "hal/LLMModule.h"
 #include "hal/SdLogger.h"
@@ -125,6 +126,13 @@ void setup() {
     // example) — a separate SPIClass(HSPI) freezes the display.
     jarvis::hal::SdLogger::begin();
 
+    // Phase 7 cloud-TTS playback: bring up M5.Speaker + ESP8266Audio MP3
+    // decoder. Always init even if no cloud key is provisioned — the
+    // audio chain is the same hardware path used by future SFX (chime
+    // on wake, error tones, etc.). LLMModule::speak() decides at call
+    // time whether to route through here or melotts.
+    jarvis::hal::AudioPlayer::begin();
+
     // Phase 3: WiFi bring-up first. NVS-backed creds; first-run provisioning
     // over USB Serial JSON. OFFLINE on failure — voice loop still runs so the
     // hardware path can be exercised without the network.
@@ -178,11 +186,20 @@ void setup() {
     jarvis::app::intentRouterBegin(&g_module);
     jarvis::app::stateMachineBegin(&g_module);
 
+    // Wire AudioPlayer's "track ended" event back into LLMModule so the
+    // FSM's existing on_speak_done_ callback (registered by
+    // stateMachineBegin) gets fired when cloud TTS finishes — same way
+    // melotts' millis()-based timer fires it for the local path.
+    jarvis::hal::AudioPlayer::setOnPlayDone([]() {
+        g_module.finishSpeaking();
+    });
+
     Serial.printf("[READY] Say \"%s\" to wake.\n", jarvis::config::kWakeWord);
 }
 
 void loop() {
     g_module.update();
+    jarvis::hal::AudioPlayer::tick();
     jarvis::app::tickStateMachine();
     refreshFooterIfIdle();
     refreshBattery();

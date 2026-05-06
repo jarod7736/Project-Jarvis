@@ -142,7 +142,8 @@ HA long-lived token also stored in NVS.
 
 ### Phase 7 — Polish & Reliability
 
-- [ ] SD card logging (query/response pairs with timestamps)
+- [x] SD card logging (query/response pairs with timestamps)
+- [ ] Cloud TTS routing with custom voice (OpenAI / ElevenLabs), melotts fallback for offline tier
 - [ ] MQTT integration alongside HA REST
 - [ ] OTA firmware update support
 - [ ] Graceful degradation testing across all connectivity tiers

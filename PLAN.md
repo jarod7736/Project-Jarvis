@@ -115,6 +115,10 @@ Namespace: `"jarvis"` (Preferences). All keys ≤15 chars.
 | `oc_key` | OpenClaw API key |
 | `mqtt_host` | MQTT broker IP (Phase 7) |
 | `fw_url` | OTA firmware URL (Phase 7) |
+| `tts_provider` | `"openai"` / `"eleven"` / `"melotts"` (Phase 7) |
+| `tts_voice_id` | Provider voice (e.g. `"onyx"` or ElevenLabs UUID) (Phase 7) |
+| `tts_api_key` | Bearer token for cloud TTS (Phase 7) |
+| `tts_model` | e.g. `"tts-1"` / `"eleven_turbo_v2_5"` (Phase 7) |
 
 First-run: if `wifi0_ssid` is empty, enter provisioning mode — display "Awaiting config via USB", read a JSON blob from `Serial` and write keys to NVS, then reboot.
 
@@ -694,6 +698,27 @@ String query(const String& userPrompt, const char* model);
 **TTS Animation:**
 - During `SPEAKING` state: 5-bar waveform via `fillRect()` on a sprite, bar heights varied via `millis()`-derived pseudo-random. Push sprite every 100ms. Animation stops when TTS-done callback fires.
 
+**Cloud TTS Routing (custom voice):**
+
+Goal: replace the on-device melotts default voice with a configurable cloud voice — e.g. a Walken-style deep gravelly preset — while keeping on-device melotts as the offline fallback.
+
+Architecture:
+- New `net/TtsClient` mirrors `net/LLMClient`: HTTPClient + WiFiClientSecure, OpenAI-style POST to `https://api.openai.com/v1/audio/speech` (cheapest path) **or** ElevenLabs `/v1/text-to-speech/<voice_id>`. Both return an audio stream — request `response_format: "mp3"` for OpenAI, `Accept: audio/mpeg` for ElevenLabs. ~24 kbps stereo MP3 = ~3 KB/s; a 10-word reply is ~30 KB.
+- New `hal/AudioPlayer` wraps M5Unified's I2S/Speaker_Class. Decodes MP3 on the fly using `ESP8266Audio` (despite the name, runs on ESP32-S3 — bundled with the platform). Push samples into `M5.Speaker` via `playRaw()`. Emits `onPlayDone` callback when the buffer drains, so the FSM can transition `SPEAKING → IDLE` the same way melotts does today.
+- `LLMModule::speak()` becomes a router. Default path: cloud TTS → `AudioPlayer` (richer voice). Fallback: tier=OFFLINE, cloud config missing, or `TtsClient` errors → existing melotts UART path. Single call site in `state_machine.cpp` doesn't change.
+
+NVS keys (extend the schema, all ≤15 chars):
+- `tts_provider` — `"openai"` | `"eleven"` | `"melotts"` (force-local). Default `"melotts"` so existing devices behave unchanged on update.
+- `tts_voice_id` — provider-specific. OpenAI: `"onyx"` / `"echo"`. ElevenLabs: a voice UUID.
+- `tts_api_key` — bearer token. Same provisioning path as `oc_key` (Serial-JSON first-run).
+- `tts_model` — e.g. `"tts-1"` (OpenAI) / `"eleven_turbo_v2_5"` (ElevenLabs). Cheaper/faster vs higher-quality is a per-deployment call.
+
+Latency:
+- OpenAI `tts-1` first-byte ~300–600 ms over LAN; total ~1–2 s for a short sentence. ElevenLabs Turbo similar. Both are streaming so playback can start before the full payload arrives — implement chunked-download → ring-buffer → I2S so the user hears the first syllable while bytes are still in flight. Without streaming we add 1–2 s on top of the LLM latency, which would push total response past the 6 s comfort threshold.
+- Hard timeout: 5 s for first byte, 15 s total. On any timeout, fall back to melotts mid-sentence (visible as a brief glitch but better than dead air).
+
+Voice cloning legal note: do NOT clone real public figures (Walken specifically) without consent — it violates right-of-publicity laws in CA/NY and every reputable TTS provider's ToS. Pick a preset voice that *evokes* the target persona (deep gravelly older male) rather than impersonating a real person. Combined with a prompt-side speech-rhythm hint to the upstream LLM (uneven pauses, odd stress patterns), the impression is 80% there without the legal exposure.
+
 **Graceful Degradation Test Matrix (manual):**
 
 | Scenario | Expected behavior |
@@ -704,8 +729,10 @@ String query(const String& userPrompt, const char* model);
 | OpenClaw unreachable | local_llm/claude intents: TTS fallback, no crash |
 | SD card absent | Logger fails silently, all else works |
 | LLM Module power-cycled | CoreS3 detects via `checkConnection()` timeout, displays "Module offline", retries init every 5s |
+| TTS provider unreachable / quota exhausted | Falls back to melotts within one timeout window (≤5 s); SPEAKING glitches but completes |
+| `tts_provider="melotts"` (force-local) | Cloud TTS bypassed entirely; behaves like pre-Phase 7 |
 
-**Files created/updated:** `app/Logger.h/.cpp`, update `net/WiFiManager.cpp` (MQTT reconnect, OTA init), update `Jarvis.ino` (watchdog, OTA handle, MQTT loop, animation tick), update `config.h` (watchdog timeout, log rotation size, MQTT topics).
+**Files created/updated:** `app/Logger.h/.cpp`, `net/TtsClient.h/.cpp`, `hal/AudioPlayer.h/.cpp`, update `hal/LLMModule.cpp` (`speak()` becomes a router with melotts fallback), update `app/NVSConfig.cpp` (new tts_* keys), update `net/WiFiManager.cpp` (MQTT reconnect, OTA init), update `Jarvis.ino` (watchdog, OTA handle, MQTT loop, animation tick), update `config.h` (watchdog timeout, log rotation size, MQTT topics, default tts_provider/voice).
 
 **Validation:**
 1. 24-hour soak: 20+ queries, review SD log — all entries present, no gaps
