@@ -121,6 +121,8 @@ void setup() {
 
     // SD logger: best-effort. Mount failure (no card / unformatted) is
     // logged once and silently ignored thereafter — voice loop still runs.
+    // Uses the global SPI instance shared with M5GFX (per CoreS3 sdcard
+    // example) — a separate SPIClass(HSPI) freezes the display.
     jarvis::hal::SdLogger::begin();
 
     // Phase 3: WiFi bring-up first. NVS-backed creds; first-run provisioning
