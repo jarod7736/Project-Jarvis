@@ -381,6 +381,45 @@ void speak(const String& text);
 
 **Dependency:** Phase 1 complete.
 
+#### Phase 2 retro (2026-05-05)
+
+Hardware-validated against StackFlow FW **v1.6** (drifted up from `v1.3` between Phase 1 and Phase 2 — the Phase 1 retro's specific failure modes don't apply to this firmware). Custom voice-loop wiring works; here's what differs from the v1.0.0 spec and from the Phase 1 retro's hypotheses.
+
+**Confirmed working pipeline:**
+
+```
+sys.reset → audio.work → kws.setup → asr.setup → melotts.setup
+```
+
+**Protocol details that differ from the v1.0.0 spec:**
+
+1. **Stale daemon state across CoreS3 reboots is real.** The AX630C runs Linux; `kws/asr/llm/melotts` daemons persist across CoreS3 power cycles. Without `sys.reset` first, our `kws.setup` returns work_ids like `kws` (no number) — those are the still-running daemons from a prior session, and the leftover Voice Assistant chain auto-responds to wake events while the host CoreS3 sees nothing on UART. With `sys.reset`, the daemons restart and assign numbered work_ids (`kws.1000`, `asr.1001`, `melotts.1002`) per the v1.0.0 spec. **Always start with `sys.reset(true)`.**
+
+2. **`audio.setup` is deprecated in v1.3+** but `audio.work` (without prior setup) is what actually starts the mic capture pipeline on v1.6. Send raw `{"action":"work","work_id":"audio.1000"}` via `module_llm.msg.sendCmd`. The retro's "audio.cap" naming was wrong; the canonical action name is `work`.
+
+3. **ASR `data.delta` is the FULL running transcript hypothesis, not an incremental fragment.** Empirically verified: accumulating `delta` strings produces nonsense like `"what what what what happening what happening..."` because each message contains "what", " what what", " what what happening", etc. — the running ASR best-guess. Replace, don't accumulate. The arduino_api docs example matches this (it just prints `delta` directly, no buffer).
+
+4. **LISTENING window must extend on each ASR fragment, not be fixed at wake time.** A 10s budget set at wake fires the timeout while the user is still mid-sentence (and ASR is still streaming). Reset the deadline on every ASR fragment so 10s means "10s of silence after wake," not "10s of total speech."
+
+5. **`enkws=true` and chained `input` arrays cause the LLM Module's daemons to auto-route internally.** If you set up KWS+ASR+LLM+TTS and chain them via `input: ["asr.xxx", kws_work_id]`, the chain self-fires on wake and the host never sees the events. For Phase 2 (echo only, no LLM), keep ASR `input = ["sys.pcm", kws_work_id]` and don't set up LLM at all — that way ASR's transcript surfaces over UART for the host to act on.
+
+6. **KWS+ASR start latency drops the front of fast speech.** A user saying "HELLO what time is it" in one breath gets transcribed as "is it" — KWS detects the wake word and ASR comes up too late to catch "what time". User-facing fix is a deliberate pause; longer-term we may need to keep ASR running constantly with `enkws=false` and use KWS purely as a gating signal on the host side.
+
+**TTS error -21 was transient.** First two boot attempts after `sys.reset` returned error code `-21` from `melotts.setup` (not in the documented enum, which goes -1 to -17). Third attempt under identical config succeeded — work_id `melotts.1002` came back from the lib's standard 15s wait, no need for the 60s raw-JSON workaround. Likely a daemon-warmup race on cold start; bake in a fallback (display-only echo) and retry tolerance, but don't fork the lib for the 15s ceiling. The 60s workaround is kept in `setupMelottsWithLongTimeout()` as a second-attempt path because it's cheap insurance.
+
+**`sys.lsmode` from raw JSON does not respond within 3s** on this firmware. Diagnostic-only — left in the code with a warning log and skip-on-timeout.
+
+**Validation gates (PLAN.md:374-378):**
+
+| Gate | Status | Notes |
+|---|---|---|
+| 1. Wake word → LISTENING in <500ms | ✅ | Bundled HELLO KWS asset; JARVIS training deferred to Phase 2.5 |
+| 2. Transcript appears on display | ✅ | After fix #3 (replace not accumulate) and fix #4 (deadline-extend) |
+| 3. 10s silence → IDLE | ✅ | LISTENING timeout fires correctly when no speech follows wake |
+| 4. TTS plays audio | ⚠️ pending user confirmation | melotts.1002 set up successfully; speak() routes through `module_llm.melotts.inference()` |
+
+**Helper script added:** `scripts/build.sh` — Windows pio against WSL-mounted source via SMB hangs at "Processing cores3"; the helper copies the project to a Windows-local temp dir and runs pio there. Supports `run`, `upload`, `monitor`, `clean`.
+
 ---
 
 ### Phase 3 — WiFi & Basic Connectivity
@@ -469,6 +508,36 @@ bool isReachable(const char* host, uint16_t port, uint32_t timeoutMs);
 
 **Dependency:** Phase 3 (WiFi + NVS for HA token/host).
 
+#### Phase 4 retro (2026-05-05)
+
+Hardware-validated end-to-end. Voice → KWS → ASR → CommandHandler keyword match → HAClient bearer-auth POST → Nabu Casa cloud → HTTP 200 → TTS confirmation. Full round-trip latency informally observed at ~3 seconds (HA call dominates; CoreS3 + ASR are sub-second).
+
+**What stayed simple:**
+
+- The `String::indexOf` keyword match with a static table is fine for Phase 4 and is genuinely throwaway as PLAN.md says — Phase 5's IntentRouter replaces it. Don't grow this table beyond what's needed to validate the HAClient round-trip with the user's actual HA install.
+- `WiFiClientSecure::setInsecure()` works against the Nabu Casa cert. Cert pinning stays a deferred TODO.
+
+**Notes from the test pass:**
+
+- `http.useHTTP10(true)` and `http.setTimeout(8000)` together are the right combo. Without `useHTTP10`, the OpenAI-compat APIs return chunked encoding; HA's REST handler has historically also chunked larger state responses.
+- `http.end()` is called on every exit path in `HAClient::doRequest()` per CLAUDE.md's WiFiClientSecure-leak rule. Verified by leaving the device looping commands for ~10 minutes — no heap fragmentation, no OOM.
+- The `applyProvisioningJson()` function takes a bag-of-keys JSON so future phases (MQTT host, OC token, OTA URL) can extend the same Serial provisioning channel by adding a key — no new flow needed.
+- Token never re-enters Serial output after provisioning — `[PROV] Saved ha_token (N chars, value not echoed)` is the most we ever say about it.
+
+**Validation gates (PLAN.md:539-543 above):**
+
+| Gate | Status | Notes |
+|---|---|---|
+| Service call (light/turn_on, light/turn_off) | ✅ | `light.office_1_light` returned HTTP 200, "Done." / "Got it." rotation worked |
+| State query (sensor.*, cover.*) | ⏳ deferred | not exercised in the validation pass; HAClient::getState wired and unit-equivalent to callService |
+| Wrong token → graceful error TTS | ⏳ deferred | code path returns kErrHaUnreachable, not exercised on hardware |
+| Full timing | ✅ | observed ~3s wake-to-confirmation; dominated by HA call (~1.5-2s round trip via Nabu Casa cloud) |
+
+**Out of scope (left for Phase 5):**
+
+- The brittle keyword table. Real intent classification + entity extraction lands with the Qwen IntentRouter.
+- Distinguishing "no match" from "HA unreachable" in the user-facing TTS — Phase 5 unifies both behind the IntentRouter's parse-fail handling.
+
 ---
 
 ### Phase 5 — Intent Routing via Qwen
@@ -505,6 +574,37 @@ String route(const String& transcript, ConnectivityTier tier);
 - Qwen inference time: measure, should be <2s for short transcripts
 
 **Dependency:** Phase 4 (HA client), Phase 2 (ASR pipeline; Qwen via UART already initialized).
+
+#### Phase 5 retro (2026-05-05)
+
+The on-device Qwen is **`qwen2.5-0.5b-prefill-20e`** — a *prefill-optimized* variant, not the full chat-tuned model. It does not reliably follow instruction prompts. Even with a 1172-char system prompt installed at `llm.setup()` (per the M5 firmware contract — system prompt at setup, user query at inference), Qwen produced unrelated completion text: *"the text of the Act"*, *"iv:1710.00669.pdf"*, *"non-negative real valued functions"* — clearly the model's pretraining-data top-of-mind, not anything it heard from us. Qwen-as-classifier fails on this device.
+
+**Working architecture: keyword classifier as primary, Qwen as best-effort hint.**
+
+`IntentRouter::route()` tries Qwen first (4s budget) and parses the JSON. On any failure (timeout, empty, unparseable, missing intent field), it falls through to a hand-coded keyword classifier covering all five intents (ha_command, ha_query, on_device, local_llm, claude). The keyword classifier handles the realistic phrasings that map cleanly; the final fallback hits `CommandHandler::dispatch` for anything the keyword classifier doesn't catch but the entity table does.
+
+This is more deterministic than expected and probably stays the design even after Phase 6 — Qwen 0.5B isn't a real classifier, and a keyword tree with five intent classes is simple and debuggable. If model-level intent classification matters later (e.g. for entity disambiguation), it'd want a different model on a different node, not the on-device prefill variant.
+
+**Lib forces the model name.** `api_melotts.cpp:31-44` overwrites the caller's `cfg.model` based on `llm_version` (set globally by `checkConnection()`) and `language`. On v1.6+ with `en_US` it forces `"melotts-en-default"`; older firmware used `"melotts_zh-cn"`. Our raw-JSON fallback path tries en-default first, then zh-cn — the package list (`device_stackflow_versions.md`) shows both model packs installed on this device.
+
+**melotts setup race fix.** Error code -21 from `melotts.setup` was hitting roughly 50/50 across boots. Two fixes resolved it:
+
+1. After `sys.reset(true)` returns, the SYS daemon has confirmed reset but the other daemons (audio/kws/asr/llm/melotts) are still loading. 500ms wasn't enough for melotts (~16s lexicon load on first warmup); bumped to 3s. melotts.setup gets called near the end of the boot chain so it has those 3s plus the ~5s of intervening unit setups before it runs.
+2. If lib path fails on attempt 1, wait 3s and retry. If still empty, fall through to raw-JSON paths with both model names. Empirically, attempt 2 succeeds on every boot tested after the warmup bump.
+
+**Validation outcomes vs PLAN.md:574 spec:**
+
+| Gate | Status | Notes |
+|---|---|---|
+| 20 test phrases ≥90% accuracy via Qwen | ❌ | Qwen unusable as classifier; replaced by keyword path |
+| Malformed Qwen → graceful fallback | ✅ | Keyword + CommandHandler chain catches every utterance shape tested |
+| HA regression (Phase 4 still works) | ✅ | "turn off the office light" → light/turn_off → 200 OK → "Done." |
+| OFFLINE tier → Qwen via TTS | ⏳ deferred | not exercised; offline plain-text path is a small follow-up |
+| Qwen inference time | ⚠️ | 4s budget hits the deadline frequently; partial output is unparseable JSON anyway |
+
+**Out of scope (left for Phase 6):**
+- The local_llm and claude intent branches return a placeholder ("Phase 6 will let me answer that"). OpenClaw client lands those.
+- The Memory module (PLAN.md "On-Device Memory & Learning"): not implemented. Phase 5 ships without prefs/facts/corrections injection. The retrieval+prompt-assembly logic depends on SD card support which Phase 7 brings.
 
 ---
 

@@ -1,120 +1,126 @@
-// Project Jarvis — Phase 1 Hardware Validation
+// Project Jarvis — Phase 2 (custom voice loop) + Phase 3 starter (WiFi/NVS).
 //
-// Mirrors the bundled M5Module-LLM VoiceAssistant example, with two additions:
-//   (1) USB-CDC Serial logging so `pio device monitor` shows the same lifecycle
-//       the on-device display shows (and any ASR/LLM JSON the lib surfaces).
-//   (2) module_llm.sys.version() capture after begin() — the StackFlow firmware
-//       version we need to pin into config.h (per CLAUDE.md).
+// Replaces the bundled M5ModuleLLM_VoiceAssistant preset (Phase 1) with a
+// hand-wired chain that explicitly sends audio.work and uses a 60s wait for
+// melotts.setup — see PLAN.md Phase 1 retro for why both are necessary on
+// current StackFlow firmware.
 //
-// Wake word here is "HELLO" (the bundled KWS asset). Custom "JARVIS" KWS is
-// Phase 2 work, not Phase 1.
-//
-// Pinned StackFlow FW (LLM Module) at Phase 1 validation: v1.3 (2026-05-03).
-// Re-test the UART JSON path after every StackFlow FW bump — the API drifts.
-// Move this constant into config.h when that file is created in Phase 2.
+// loop() does just two things: pump the HAL's UART poll, then tick the FSM.
+// All callbacks set flags only — see hal/LLMModule.h and app/state_machine.h.
 
 #include <Arduino.h>
 #include <M5Unified.h>
-#include <M5ModuleLLM.h>
 
+#include "app/IntentRouter.h"
+#include "app/NVSConfig.h"
+#include "app/state_machine.h"
+#include "config.h"
+#include "hal/Display.h"
+#include "hal/LLMModule.h"
+#include "net/HAClient.h"
+#include "net/LLMClient.h"
 #include "net/WiFiManager.h"
 
-M5ModuleLLM module_llm;
-M5ModuleLLM_VoiceAssistant voice_assistant(&module_llm);
+namespace {
+jarvis::hal::LLMModule g_module;
 
-void on_asr_data_input(String data, bool isFinish, int index)
-{
-    M5.Display.setTextColor(TFT_GREEN, TFT_BLACK);
-    M5.Display.printf(">> %s\n", data.c_str());
-    Serial.printf("[ASR] finish=%d idx=%d text=%s\n", isFinish, index, data.c_str());
+// Footer state — track last-rendered tier/rssi so we only redraw when
+// they change, avoiding flicker at the configured refresh cadence.
+jarvis::net::ConnectivityTier g_last_tier = jarvis::net::ConnectivityTier::OFFLINE;
+int                            g_last_rssi = 0;
+uint32_t                       g_last_footer_ms = 0;
 
-    if (isFinish) {
-        M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
-        M5.Display.print(">> ");
+// Refresh the footer's tier/rssi line. Cheap when tier is cached; the
+// underlying probe can take 2-5s so we only call this from IDLE so it
+// doesn't stall a voice cycle.
+void refreshFooterIfIdle() {
+    using jarvis::app::currentState;
+    using jarvis::hal::DeviceState;
+    using jarvis::net::WiFiManager;
+
+    if (currentState() != DeviceState::IDLE) return;
+    if (millis() - g_last_footer_ms < 1000) return;  // throttle render
+
+    auto tier = WiFiManager::getConnectivityTier();
+    int  rssi = WiFiManager::isConnected() ? WiFiManager::getRSSI() : 0;
+    if (tier == g_last_tier && rssi == g_last_rssi) {
+        g_last_footer_ms = millis();
+        return;
     }
+    jarvis::hal::Display::updateFooter(jarvis::net::tierName(tier), rssi);
+    g_last_tier = tier;
+    g_last_rssi = rssi;
+    g_last_footer_ms = millis();
 }
+}  // namespace
 
-// Qwen streams response tokens as fragments. Mirror them to the display live
-// so the user sees the reply forming, but accumulate into one buffer and emit
-// a single greppable `[LLM] idx=N reply="..."` line on isFinish — the streaming
-// fragments have no prefix and were getting lost in serial-log filters.
-static String llm_accum;
-
-void on_llm_data_input(String data, bool isFinish, int index)
-{
-    M5.Display.print(data);
-    llm_accum += data;
-
-    if (isFinish) {
-        M5.Display.print("\n");
-        Serial.printf("[LLM] idx=%d reply=\"%s\"\n", index, llm_accum.c_str());
-        llm_accum = "";
-    }
-}
-
-void setup()
-{
+void setup() {
     M5.begin();
-    M5.Display.setTextSize(2);
-    M5.Display.setTextScroll(true);
-
     Serial.begin(115200);
     delay(200);
     Serial.println();
-    Serial.println("=== Project Jarvis — Phase 1 (voice) + Phase 3 (WiFi) ===");
+    Serial.println("=== Project Jarvis — Phase 2 voice loop ===");
 
-    // Phase 3: WiFi bring-up before voice loop. NVS-backed creds; first-run
-    // provisioning over USB Serial JSON. Falls through OFFLINE on failure so
-    // the validated voice loop still runs.
-    M5.Display.printf(">> WiFi: connecting..\n");
+    jarvis::hal::Display::begin();
+
+    // Phase 3: WiFi bring-up first. NVS-backed creds; first-run provisioning
+    // over USB Serial JSON. OFFLINE on failure — voice loop still runs so the
+    // hardware path can be exercised without the network.
+    Serial.print("[WiFi] connecting...");
     bool wifi_ok = jarvis::net::WiFiManager::begin(20000);
     if (wifi_ok) {
-        M5.Display.printf(">> WiFi: %s\n", jarvis::net::WiFiManager::getIP().c_str());
-        M5.Display.printf(">> RSSI: %d dBm\n", jarvis::net::WiFiManager::getRSSI());
+        Serial.printf(" OK  ip=%s rssi=%d\n",
+                      jarvis::net::WiFiManager::getIP().c_str(),
+                      jarvis::net::WiFiManager::getRSSI());
     } else {
-        M5.Display.setTextColor(TFT_RED, TFT_BLACK);
-        M5.Display.printf(">> WiFi: OFFLINE (continuing)\n");
-        M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+        Serial.println(" OFFLINE");
     }
+    // Initial footer paint — refreshFooterIfIdle() will replace this with
+    // the tier-tagged version once getConnectivityTier() probes complete.
+    jarvis::hal::Display::updateFooter("...", wifi_ok ? jarvis::net::WiFiManager::getRSSI() : 0);
 
+    // Phase 4/6: prompt for credentials if any of the optional services is
+    // unconfigured. Short window (30s). Bag-of-keys JSON: any combination
+    // of ssid, pass, ha_token, ha_host, oc_key, oc_host.
+    bool need_ha = (jarvis::NVSConfig::getHaToken().length() == 0);
+    bool need_oc = (jarvis::NVSConfig::getOcKey().length()   == 0);
+    if (wifi_ok && (need_ha || need_oc)) {
+        Serial.printf("[PROV] Missing creds: ha_token=%s oc_key=%s\n",
+                      need_ha ? "MISSING" : "set",
+                      need_oc ? "MISSING" : "set");
+        Serial.println("[PROV] Send JSON now, or skip and those services error.");
+        jarvis::NVSConfig::provisionFromSerial(30000);
+    }
+    Serial.printf("[HA] configured=%s host=%s\n",
+                  jarvis::net::HAClient::isConfigured() ? "yes" : "no",
+                  jarvis::NVSConfig::getHaHost().c_str());
+    Serial.printf("[OC] configured=%s host=%s\n",
+                  jarvis::net::LLMClient::isConfigured() ? "yes" : "no",
+                  jarvis::NVSConfig::getOcHost().c_str());
+
+    // M5Bus UART: 115200 8N1. Pins resolved at runtime via Port C — they
+    // differ across CoreS3 revisions, don't hardcode.
     int rxd = M5.getPin(m5::pin_name_t::port_c_rxd);
     int txd = M5.getPin(m5::pin_name_t::port_c_txd);
-    Serial.printf("[UART] Port C pins: RX=%d TX=%d @ 115200 8N1\n", rxd, txd);
+    Serial.printf("[UART] Port C: RX=%d TX=%d @ 115200 8N1\n", rxd, txd);
     Serial2.begin(115200, SERIAL_8N1, rxd, txd);
 
-    module_llm.begin(&Serial2);
-
-    M5.Display.printf(">> Check ModuleLLM connection..\n");
-    Serial.print("[CONN] Waiting for ModuleLLM");
-    while (!module_llm.checkConnection()) {
-        Serial.print(".");
-        delay(500);
-    }
-    Serial.println(" OK");
-
-    String fw = module_llm.sys.version();
-    M5.Display.printf(">> StackFlow FW: %s\n", fw.c_str());
-    Serial.printf("[FW] StackFlow version: %s\n", fw.c_str());
-
-    M5.Display.printf(">> Begin voice assistant..\n");
-    int ret = voice_assistant.begin("HELLO");
-    if (ret != MODULE_LLM_OK) {
-        Serial.printf("[ERR] voice_assistant.begin() returned %d\n", ret);
-        M5.Display.setTextColor(TFT_RED);
-        M5.Display.printf(">> Begin voice assistant failed (%d)\n", ret);
-        while (1) {
-            delay(1000);
-        }
+    if (!g_module.begin(&Serial2)) {
+        Serial.printf("[FATAL] LLMModule.begin failed: %s\n",
+                      g_module.getLastError().c_str());
+        jarvis::hal::Display::setStatus(jarvis::hal::DeviceState::ERROR);
+        // Halt — Phase 4+ retries; Phase 2 just stops and waits for reboot.
+        while (true) delay(1000);
     }
 
-    voice_assistant.onAsrDataInput(on_asr_data_input);
-    voice_assistant.onLlmDataInput(on_llm_data_input);
+    jarvis::app::intentRouterBegin(&g_module);
+    jarvis::app::stateMachineBegin(&g_module);
 
-    M5.Display.printf(">> Voice assistant ready\n");
-    Serial.println("[READY] Say \"HELLO\" to wake.");
+    Serial.printf("[READY] Say \"%s\" to wake.\n", jarvis::config::kWakeWord);
 }
 
-void loop()
-{
-    voice_assistant.update();
+void loop() {
+    g_module.update();
+    jarvis::app::tickStateMachine();
+    refreshFooterIfIdle();
 }

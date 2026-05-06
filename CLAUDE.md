@@ -32,6 +32,16 @@ These cut across multiple sections of the plan and are easy to miss from any sin
 - **OpenClaw** (Tailscale): `https://lobsterboy.tail1c66ec.ts.net` — OpenAI-compatible `POST /v1/chat/completions`. Used for both local-LLM and Claude routing (model selected via the `model` field; constants in `config.h` will be `OC_LOCAL_MODEL` and `OC_CLAUDE_MODEL`).
 - **Home Assistant** (Nabu Casa): `pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa` — REST API, bearer-token auth from NVS (`ha_token`). Use `WiFiClientSecure` with `setInsecure()` for now; cert pinning is a deferred TODO.
 
+## Reference documentation
+
+Local copies of canonical hardware/API references live under `docs/reference/`. Prefer these over web searches when answering questions about the LLM Module or the AX630C SoC — they're version-pinned and won't drift. See `docs/reference/README.md` for the full index.
+
+Highest-leverage files for this project:
+- `docs/reference/LLM_Module_API_v1.0.0_EN.pdf` — official StackFlow UART JSON API spec (sys/audio/kws/asr/llm/tts units, packet format, error codes, Voice Assistant chain). Per this spec the action to start a unit is `<unit>.work`, not `<unit>.cap` — contradicts the Phase 1 retro's hypothesis and should inform voice-loop wiring. Spec is v1.0.0 (2024-10-24); device firmware is `v1.3` per Phase 1 validation, so a few field names have shifted (`max_token_len` vs `max_length`).
+- `docs/reference/m5stack/en/stackflow/module_llm/arduino_api.md` — Arduino library API reference. First place to look for the C++ surface of `module_llm.audio/kws/asr/llm/tts/sys`.
+- `docs/reference/m5stack/axera_docs/05 - AX AUDIO API Document.pdf` — the layer below StackFlow's `audio.*` actions. Useful when StackFlow's audio behavior diverges from the spec (as in the Phase 1 retro).
+- `docs/reference/m5stack/Sch_M5_Module-LLM.pdf` — Module schematic (M5Bus pinout, power tree).
+
 ## Adding new voice commands
 
 In Phase 4 (pre-Qwen), commands are a static `CommandEntry[]` table in `app/CommandHandler.cpp` matched via `String::indexOf()` — intentionally brittle, gets replaced in Phase 5. From Phase 5 onward, new intents are added by (a) extending the few-shot examples in `prompts/intent_prompt.h` and (b) adding a dispatch branch in `IntentRouter`. Do not add intents without updating both.
