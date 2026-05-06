@@ -10,6 +10,7 @@
 
 #include <Arduino.h>
 #include <M5Unified.h>
+#include <esp_task_wdt.h>
 
 #include "app/IntentRouter.h"
 #include "app/NVSConfig.h"
@@ -195,9 +196,27 @@ void setup() {
     });
 
     Serial.printf("[READY] Say \"%s\" to wake.\n", jarvis::config::kWakeWord);
+
+    // Hardware watchdog: panics + reboots if loop() goes silent for
+    // longer than kWatchdogTimeoutSec. The single source of truth for
+    // "we're alive" is reaching the top of loop() — an HTTP/UART hang
+    // that doesn't return control trips the dog. Subscribing the
+    // current task (loop task) is enough; freertos drives the rest.
+    //
+    // espressif32@6.13.0 ships Arduino-ESP32 2.x / IDF 4.x — old 2-arg
+    // init signature. IDF 5.x's struct form (esp_task_wdt_config_t) is
+    // not available until Arduino-ESP32 3.x.
+    esp_task_wdt_init(jarvis::config::kWatchdogTimeoutSec, /*panic=*/true);
+    esp_task_wdt_add(nullptr);   // subscribe the current (loop) task
+    Serial.printf("[WDT] armed: timeout=%us\n",
+                  (unsigned)jarvis::config::kWatchdogTimeoutSec);
 }
 
 void loop() {
+    // Feed the watchdog at the top of every iteration. Anything below
+    // that hangs longer than kWatchdogTimeoutSec triggers a panic-reboot.
+    esp_task_wdt_reset();
+
     g_module.update();
     jarvis::hal::AudioPlayer::tick();
     jarvis::app::tickStateMachine();
