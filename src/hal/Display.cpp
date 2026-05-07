@@ -1,394 +1,580 @@
+// Display.cpp — Jarvis on-device UI: Tri-Arc · Sonar · Phosphor port.
+//
+// Recreation of the design the user landed on in claude.ai/design — see
+// docs/jarvis_particle_prototype.html and the JARVIS HUD bundle. The
+// reference design is React/SVG; this is the firmware port using direct
+// M5GFX draws on the CoreS3 320×240 panel.
+//
+// Implementation choices vs the React prototype:
+//   - No sprite / no PSRAM. The previous particle-field port used a
+//     32bpp full-screen sprite in PSRAM and the alpha-blend pass was
+//     too heavy. Sonar is structurally lighter (a few rings + a few
+//     waveform lines) so we draw straight to M5.Display and accept a
+//     small amount of flicker during the per-frame redraw of the
+//     central reactor band.
+//   - Solid colors instead of alpha glow. M5GFX has no real per-pixel
+//     blending on direct-to-LCD drawing, so each shape is a single
+//     stroke or fill. Lines are integer-pixel weight (1-2 px).
+//   - 24 radial waveform "spokes" instead of the prototype's 48 — keeps
+//     the per-frame draw count down. At 320×240 this still reads as a
+//     continuous radial fan.
+//   - Frame cadence: ~12 FPS (kFrameMs = 80). Slow enough to not steal
+//     time from the LLMModule UART poll + FSM tick + MQTT/OTA, fast
+//     enough that the spin/ring/waveform animations look fluid.
+//
+// Public API matches the prior boxed-region UI so callers (state_machine,
+// main loop, FSM) don't need any changes.
+
 #include "Display.h"
 
 #include <M5Unified.h>
+#include <math.h>
 #include <time.h>
 
 namespace jarvis::hal {
 
-// ── Layout (px) ─────────────────────────────────────────────────────────────
-// CoreS3 display: 320 × 240.  All Y values are top-of-region.
+// ── Layout ──────────────────────────────────────────────────────────────────
 namespace {
-    constexpr int SCR_W   = 320;
+constexpr int SCR_W = 320;
+constexpr int SCR_H = 240;
 
-    constexpr int STATUS_Y = 0,   STATUS_H = 30;
-    // 5px implicit gap (black) between status bar and transcript
-    constexpr int TRANS_Y  = 35,  TRANS_H  = 60;
-    // 5px implicit gap then 1px divider
-    constexpr int DIV1_Y   = 100;
-    constexpr int RESP_Y   = 101, RESP_H   = 109;
-    constexpr int DIV2_Y   = 210;
-    constexpr int FOOT_Y   = 211, FOOT_H   = 29;
+// Top status bar — chrome left/right + battery/wifi icons
+constexpr int CHROME_Y     = 4;
+constexpr int CHROME_H     = 14;
 
-    // Status-bar dot geometry
-    constexpr int DOT_X  = 10;
-    constexpr int DOT_Y  = STATUS_Y + STATUS_H / 2;  // vertically centred
-    constexpr int DOT_R  = 6;
-    constexpr int LBL_X  = DOT_X + DOT_R + 6;        // 4px gap after dot
-    constexpr int LBL_Y  = STATUS_Y + (STATUS_H - 16) / 2;  // textSize=2 → 16px tall
+// Central reactor band — rendered into an off-screen sprite so the
+// per-frame clear+redraw doesn't strobe on the panel.
+constexpr int REACTOR_Y    = 22;
+constexpr int REACTOR_H    = 178;
+constexpr int REACTOR_CX   = SCR_W / 2;
+constexpr int REACTOR_CY   = REACTOR_Y + REACTOR_H / 2 - 4;
 
-    // Battery indicator (top-right of status bar). Body + tab + pct text.
-    //   [ ##### ]| 87%   ← drawn right-to-left
-    constexpr int BATT_BODY_W = 20;
-    constexpr int BATT_BODY_H = 12;
-    constexpr int BATT_TIP_W  = 2;
-    constexpr int BATT_TIP_H  = 6;
-    // Right edge of the tip sits 4px from screen edge.
-    constexpr int BATT_TIP_X  = SCR_W - 4 - BATT_TIP_W;
-    constexpr int BATT_BODY_X = BATT_TIP_X - BATT_BODY_W;
-    constexpr int BATT_BODY_Y = STATUS_Y + (STATUS_H - BATT_BODY_H) / 2;
-    constexpr int BATT_TIP_Y  = STATUS_Y + (STATUS_H - BATT_TIP_H) / 2;
-    // Percentage text: 4 chars max ("100%" / "--%"), 6px each at textSize=1.
-    constexpr int BATT_PCT_W  = 4 * 6;  // 24
-    constexpr int BATT_PCT_X  = BATT_BODY_X - 4 - BATT_PCT_W;
-    constexpr int BATT_PCT_Y  = STATUS_Y + (STATUS_H - 8) / 2;
+// Transcript line (single line, only when thinking/speaking; idle hint
+// when idle).
+constexpr int TRANSCRIPT_Y = 200;
+constexpr int TRANSCRIPT_H = 18;
 
-    // WiFi indicator: 3-bar signal icon in the status bar. Sits to the
-    // left of the battery percent text so the right side reads
-    // "wifi-bars 87% [bat]". Compact — a 16×16 region.
-    constexpr int WIFI_BAR_W  = 4;
-    constexpr int WIFI_BAR_GAP = 2;
-    constexpr int WIFI_BARS    = 3;
-    constexpr int WIFI_W       = WIFI_BARS * WIFI_BAR_W + (WIFI_BARS - 1) * WIFI_BAR_GAP;
-    constexpr int WIFI_H       = 14;  // tallest bar
-    constexpr int WIFI_X       = BATT_PCT_X - WIFI_W - 6;  // 6px gap from "100%"
-    constexpr int WIFI_Y       = STATUS_Y + (STATUS_H - WIFI_H) / 2;
+// Bottom footer — always shows tier/RSSI and (when NTP is up) wall-clock.
+constexpr int FOOTER_Y     = 220;
+constexpr int FOOTER_H     = 20;
 
-    // SPEAKING-state waveform animation. A 30 px band at the bottom of
-    // the response region, drawn as a continuous oscilloscope-style
-    // waveform: many points across the width, connected by line
-    // segments, each point jittered around the centerline. Looks more
-    // like audio than the original 5-bar bargraph.
-    constexpr int WAVE_H         = 30;
-    constexpr int WAVE_Y         = RESP_Y + RESP_H - WAVE_H;  // bottom of response
-    constexpr int WAVE_MID       = WAVE_Y + WAVE_H / 2;
-    // Number of sample points across the screen. 64 = ~5 px between
-    // points on the 320 px display — fluid enough that the line looks
-    // continuous, sparse enough that fillRect cost stays trivial.
-    constexpr int WAVE_POINTS    = 64;
-    constexpr int WAVE_DX        = SCR_W / WAVE_POINTS;
-    // Max excursion from the centerline. ±13 px keeps the waveform
-    // visually inside the 30 px band with a 1 px margin top/bottom.
-    constexpr int WAVE_AMPLITUDE = (WAVE_H / 2) - 2;
-    // Refresh cadence — 10 Hz looks fluid without burning bus time.
-    constexpr uint32_t WAVE_FRAME_MS = 100;
+// Battery indicator (top-right)
+constexpr int BATT_BODY_W  = 18;
+constexpr int BATT_BODY_H  = 10;
+constexpr int BATT_TIP_W   = 2;
+constexpr int BATT_TIP_H   = 4;
+constexpr int BATT_TIP_X   = SCR_W - 6 - BATT_TIP_W;
+constexpr int BATT_BODY_X  = BATT_TIP_X - BATT_BODY_W;
+constexpr int BATT_BODY_Y  = CHROME_Y + (CHROME_H - BATT_BODY_H) / 2;
+constexpr int BATT_TIP_Y   = CHROME_Y + (CHROME_H - BATT_TIP_H) / 2;
+
+// Frame cadence — 12 FPS keeps the animation fluid without crowding the
+// voice pipeline.
+constexpr uint32_t kFrameMs = 80;
+
+// ── Phosphor palette (from REACTOR_THEMES.phosphor in the bundle) ───────────
+//   bg      #04060a  near-black background
+//   bg2     #080d10  ring of slightly lighter dark behind the reactor
+//   fg      #ffd388  warm amber text
+//   dim     #7a5a2a  brown for outer frame, chrome subtitle
+//   primary #ffaa2a  amber — listening color
+//   accent  #5dff8e  mint  — response color
+inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+}
+const uint16_t COL_BG       = rgb565(0x04, 0x06, 0x0A);
+const uint16_t COL_BG2      = rgb565(0x08, 0x0D, 0x10);
+const uint16_t COL_FG       = rgb565(0xFF, 0xD3, 0x88);
+const uint16_t COL_DIM      = rgb565(0x7A, 0x5A, 0x2A);
+const uint16_t COL_PRIMARY  = rgb565(0xFF, 0xAA, 0x2A);
+const uint16_t COL_ACCENT   = rgb565(0x5D, 0xFF, 0x8E);
+const uint16_t COL_DANGER   = rgb565(0xFF, 0x4D, 0x4D);
+
+// ── Cached state ────────────────────────────────────────────────────────────
+DeviceState g_state          = DeviceState::IDLE;
+uint32_t    g_last_frame_ms  = 0;
+uint32_t    g_seed           = 0x1234ABCD;
+float       g_mic_level      = 0.0f;
+
+int    g_battery_level    = -1;
+bool   g_battery_charging = false;
+String g_wifi_tier        = "...";
+int    g_wifi_rssi        = 0;
+bool   g_ota_active       = false;
+
+// Transcript / response text — populated by showTranscript / showResponse,
+// reset on state transitions. The reference design splits these into a
+// dim "▸ query" line and a bright response line; we follow the same
+// pattern but render plain text since we don't have a typewriter effect
+// budget on-device.
+String  g_query_text;
+String  g_response_text;
+
+// Reactor sprite — flicker-free off-screen buffer. 320×178×2B = ~113 KB,
+// allocated lazily on first begin(). LovyanGFX prefers internal SRAM
+// when the size fits; falls back to PSRAM (or to direct draws) on
+// failure. Per-frame: we fill it, draw all the reactor primitives into
+// it, and push it to the panel in one DMA blit.
+M5Canvas g_reactor(&M5.Display);
+bool     g_reactor_ready = false;
+
+// ── PRNG (xorshift32) ───────────────────────────────────────────────────────
+inline uint32_t xs32() {
+    g_seed ^= g_seed << 13;
+    g_seed ^= g_seed >> 17;
+    g_seed ^= g_seed << 5;
+    return g_seed;
+}
+inline float frand() { return (float)(xs32() & 0xFFFFFF) / (float)0xFFFFFF; }
+
+// ── Drawing helpers ─────────────────────────────────────────────────────────
+
+// State chrome string — top-right corner. Mirrors the reference design's
+// "RX·CORE" / "IN·MIC1" / "NEURAL·LM" / "OUT·SPK" / "RDY" labels.
+const char* stateChromeText(DeviceState s) {
+    switch (s) {
+        case DeviceState::LISTENING: return "IN-MIC1";
+        case DeviceState::THINKING:  return "NEURAL-LM";
+        case DeviceState::SPEAKING:  return "OUT-SPK";
+        case DeviceState::ERROR:     return "ERR";
+        case DeviceState::IDLE:
+        default:                     return "RDY";
+    }
 }
 
-// ── Per-state colours and labels ─────────────────────────────────────────────
-struct StateStyle {
-    uint16_t bg;
-    uint16_t fg;
-    const char* label;
-};
-
-static constexpr StateStyle kStyles[] = {
-    { TFT_BLACK,    TFT_DARKGREY, "IDLE"      },  // IDLE
-    { TFT_BLUE,     TFT_WHITE,    "LISTENING" },  // LISTENING
-    { TFT_YELLOW,   TFT_BLACK,    "THINKING"  },  // THINKING
-    { TFT_GREEN,    TFT_BLACK,    "SPEAKING"  },  // SPEAKING
-    { TFT_RED,      TFT_WHITE,    "ERROR"     },  // ERROR
-};
-
-// Cached state, so setStatus() (which fillRects the entire bar) can repaint
-// the battery indicator with whatever values were last polled, and so
-// updateBattery() (called outside a state change) knows which colours to
-// use. -1 level means "not yet polled" — render an empty icon + "--%".
-namespace {
-    DeviceState g_current_state    = DeviceState::IDLE;
-    int         g_battery_level    = -1;
-    bool        g_battery_charging = false;
-    // WiFi state cached by updateFooter() so setStatus() can repaint the
-    // signal-bar icon after fillRect wipes the status bar. tier is the
-    // string handed in by main.cpp ("LAN"/"TS"/"HOT"/"OFF"/"...").
-    String      g_wifi_tier        = "...";
-    int         g_wifi_rssi        = 0;
-
-    // OTA badge state. Set true while ArduinoOTA or HTTPUpdate is
-    // active; the footer renderer prepends "OTA " to the tier+RSSI
-    // string. Cached so an updateFooter() called after a tier change
-    // repaints the badge correctly without OtaService having to chase
-    // every footer redraw.
-    bool      g_ota_active = false;
-
-    // Waveform animation state. `g_wave_was_speaking` lets tickWaveform()
-    // detect the SPEAKING→other transition and erase exactly once.
-    bool      g_wave_was_speaking = false;
-    uint32_t  g_wave_last_frame_ms = 0;
-    // Tiny PRNG seed advanced per-bar per-frame. xorshift32 is fine for
-    // visual jitter — we just want non-repeating bar heights.
-    uint32_t  g_wave_seed         = 0x1234ABCD;
-
-    // Paint the wifi signal-bar icon. Three vertical bars of ascending
-    // height. Filled bars = signal strength (3 strong / 2 medium / 1
-    // weak / 0 offline-or-connecting). Colour:
-    //   "OFF"  → red (offline)
-    //   "..."  → yellow (connecting/probing)
-    //   else   → green or fg colour (connected, tier=LAN/TS/HOT)
-    // Outline drawn for empty bars so the icon shape is always readable
-    // against any state-bar background.
-    void drawWifi() {
-        const StateStyle& s = kStyles[static_cast<int>(g_current_state)];
-        const uint16_t bg = s.bg;
-        const uint16_t fg = s.fg;
-
-        bool offline    = g_wifi_tier.equalsIgnoreCase("OFF");
-        bool connecting = g_wifi_tier.equals("...") || g_wifi_tier.length() == 0;
-
-        // Map RSSI to filled-bar count. Defaults: -55 dBm = 3, -70 = 2,
-        // anything weaker = 1. RSSI of 0 dBm is the "no reading" sentinel.
-        int filled;
-        if (offline)         filled = 0;
-        else if (connecting) filled = 0;  // animate later if needed
-        else if (g_wifi_rssi == 0)   filled = 1;
-        else if (g_wifi_rssi >= -55) filled = 3;
-        else if (g_wifi_rssi >= -70) filled = 2;
-        else                         filled = 1;
-
-        uint16_t fill_color =
-            offline    ? TFT_RED :
-            connecting ? TFT_YELLOW :
-            fg;
-
-        for (int i = 0; i < WIFI_BARS; ++i) {
-            int bar_h = (i + 1) * (WIFI_H / WIFI_BARS);
-            int x     = WIFI_X + i * (WIFI_BAR_W + WIFI_BAR_GAP);
-            int y     = WIFI_Y + (WIFI_H - bar_h);  // bottom-aligned
-
-            if (i < filled) {
-                M5.Display.fillRect(x, y, WIFI_BAR_W, bar_h, fill_color);
-            } else {
-                // Outline only for empty bars — keeps the icon's shape
-                // visible at "1 bar" or "offline" without it looking
-                // like the icon vanished.
-                uint16_t outline = offline ? TFT_RED : fg;
-                M5.Display.drawRect(x, y, WIFI_BAR_W, bar_h, outline);
-            }
-        }
-
-        // Diagonal red slash on the lowest bar when offline — distinct
-        // from a normal "1 bar" connected state.
-        if (offline) {
-            M5.Display.drawLine(WIFI_X, WIFI_Y + WIFI_H - 1,
-                                WIFI_X + WIFI_W - 1, WIFI_Y, TFT_RED);
+// Battery icon + percentage in the top-right.
+void drawBattery() {
+    M5.Display.fillRect(BATT_BODY_X - 30, CHROME_Y, 30 + BATT_BODY_W + BATT_TIP_W + 2,
+                        CHROME_H, COL_BG);
+    // Body outline + tip
+    M5.Display.drawRect(BATT_BODY_X, BATT_BODY_Y, BATT_BODY_W, BATT_BODY_H, COL_DIM);
+    M5.Display.fillRect(BATT_TIP_X, BATT_TIP_Y, BATT_TIP_W, BATT_TIP_H, COL_DIM);
+    // Fill
+    int pct = g_battery_level;
+    if (pct >= 0) {
+        if (pct > 100) pct = 100;
+        int bw = ((BATT_BODY_W - 4) * pct) / 100;
+        if (bw > 0) {
+            uint16_t col = (pct < 20) ? COL_DANGER : COL_PRIMARY;
+            M5.Display.fillRect(BATT_BODY_X + 2, BATT_BODY_Y + 2, bw, BATT_BODY_H - 4, col);
         }
     }
-
-    // Paint the battery indicator into the status bar using the current
-    // state's bg/fg. Called from setStatus() (after fillRect) and
-    // updateBattery() (which fillRects just the battery region first).
-    void drawBattery() {
-        const StateStyle& s = kStyles[static_cast<int>(g_current_state)];
-        const uint16_t bg = s.bg;
-        const uint16_t fg = s.fg;
-
-        // Outline + tip in fg.
-        M5.Display.drawRect(BATT_BODY_X, BATT_BODY_Y,
-                            BATT_BODY_W, BATT_BODY_H, fg);
-        M5.Display.fillRect(BATT_TIP_X, BATT_TIP_Y,
-                            BATT_TIP_W, BATT_TIP_H, fg);
-
-        // Inside cleared to bg.
-        M5.Display.fillRect(BATT_BODY_X + 1, BATT_BODY_Y + 1,
-                            BATT_BODY_W - 2, BATT_BODY_H - 2, bg);
-
-        // Fill bar: red below 20%, fg otherwise. Clamp 0..100.
-        int pct = g_battery_level;
-        if (pct >= 0) {
-            if (pct > 100) pct = 100;
-            int bar_w = ((BATT_BODY_W - 4) * pct) / 100;
-            if (bar_w > 0) {
-                uint16_t bar_color = (pct < 20) ? TFT_RED : fg;
-                M5.Display.fillRect(BATT_BODY_X + 2, BATT_BODY_Y + 2,
-                                    bar_w, BATT_BODY_H - 4, bar_color);
-            }
-        }
-
-        // Charging glyph: small bolt overlaid in yellow. Drawn last so it
-        // shows on top of any fill. Skipped on YELLOW backgrounds (THINKING
-        // state) where it'd be invisible — fall back to a contrasting bolt.
-        if (g_battery_charging) {
-            uint16_t bolt = (s.bg == TFT_YELLOW) ? TFT_BLACK : TFT_YELLOW;
-            int cx = BATT_BODY_X + BATT_BODY_W / 2;
-            int top = BATT_BODY_Y + 2;
-            int bot = BATT_BODY_Y + BATT_BODY_H - 3;
-            int mid = BATT_BODY_Y + BATT_BODY_H / 2;
-            // Lightning bolt: top-right → mid-left → bottom-right.
-            M5.Display.drawLine(cx + 2, top, cx - 1, mid, bolt);
-            M5.Display.drawLine(cx - 1, mid, cx + 2, mid, bolt);
-            M5.Display.drawLine(cx + 2, mid, cx - 2, bot, bolt);
-        }
-
-        // Percentage text. Right-aligned at BATT_PCT_X+BATT_PCT_W.
-        char buf[8];
-        if (g_battery_level < 0) {
-            snprintf(buf, sizeof(buf), " --%%");
-        } else {
-            snprintf(buf, sizeof(buf), "%3d%%", pct);
-        }
+    // Charging glyph (small "+" beside the battery)
+    if (g_battery_charging) {
         M5.Display.setTextSize(1);
-        M5.Display.setTextColor(fg, bg);
-        M5.Display.setCursor(BATT_PCT_X, BATT_PCT_Y);
-        M5.Display.print(buf);
+        M5.Display.setTextColor(COL_ACCENT, COL_BG);
+        M5.Display.setCursor(BATT_BODY_X - 10, CHROME_Y + 3);
+        M5.Display.print("+");
     }
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
-void Display::begin() {
-    M5.Display.setTextWrap(false);
-    M5.Display.fillScreen(TFT_BLACK);
+// WiFi connection arc + status. Drawn with two arcs and a center dot —
+// matches the prototype's status-bar wifi glyph (curved bars), not the
+// 3-bar bargraph the previous boxed UI used.
+void drawWifi() {
+    constexpr int WX = SCR_W - 88, WY = CHROME_Y + 7;
+    M5.Display.fillRect(WX - 8, CHROME_Y, 18, CHROME_H, COL_BG);
 
-    M5.Display.drawFastHLine(0, DIV1_Y, SCR_W, TFT_DARKGREY);
-    M5.Display.drawFastHLine(0, DIV2_Y, SCR_W, TFT_DARKGREY);
+    bool offline    = g_wifi_tier.equalsIgnoreCase("OFF");
+    bool connecting = g_wifi_tier.equals("...") || g_wifi_tier.length() == 0;
+    uint16_t col = offline ? COL_DANGER : (connecting ? COL_DIM : COL_PRIMARY);
 
-    setStatus(DeviceState::IDLE);
-    updateFooter("OFF", 0);
+    // Outer arc (broader curve)
+    M5.Display.drawArc(WX, WY, 7, 5, 200, 340, col);
+    // Inner arc
+    M5.Display.drawArc(WX, WY, 4, 3, 200, 340, col);
+    // Center dot
+    M5.Display.fillCircle(WX, WY - 1, 1, col);
 }
 
-void Display::setStatus(DeviceState state) {
-    g_current_state = state;
-    const StateStyle& s = kStyles[static_cast<int>(state)];
+// Top-left chrome: "RX-CORE" left, state label right.
+// Right side also reserves room for OTA badge if active.
+void drawChrome() {
+    M5.Display.fillRect(0, 0, SCR_W, CHROME_H + 6, COL_BG);
 
-    M5.Display.fillRect(0, STATUS_Y, SCR_W, STATUS_H, s.bg);
-    M5.Display.fillCircle(DOT_X, DOT_Y, DOT_R, s.fg);
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(s.fg, s.bg);
-    M5.Display.setCursor(LBL_X, LBL_Y);
-    M5.Display.print(s.label);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(COL_DIM, COL_BG);
+    M5.Display.setCursor(6, CHROME_Y + 3);
+    M5.Display.print("RX-CORE");
 
-    // fillRect wiped the right side of the bar — repaint cached
-    // wifi/battery indicators.
+    // State chrome — mid-left of the bar
+    M5.Display.setTextColor(COL_PRIMARY, COL_BG);
+    M5.Display.setCursor(SCR_W / 2 - 24, CHROME_Y + 3);
+    M5.Display.print(stateChromeText(g_state));
+
+    // Optional OTA badge to the left of the wifi+battery cluster
+    if (g_ota_active) {
+        M5.Display.setTextColor(COL_ACCENT, COL_BG);
+        M5.Display.setCursor(SCR_W - 110, CHROME_Y + 3);
+        M5.Display.print("OTA");
+    }
+
     drawWifi();
     drawBattery();
 }
 
+// Mic level synth — pumps the radial waveform. We don't have a real
+// audio level signal in this codebase yet (the Module-LLM ASR runs
+// off-MCU on the Axera SoC), so we synthesize a plausible amplitude
+// envelope from time. Listening: jittery + slow undulation. Speaking:
+// faster + more sinusoidal. Idle/Thinking: zero.
+void synthMicLevel(float t) {
+    if (g_state == DeviceState::LISTENING) {
+        g_mic_level = 0.3f + 0.6f * (0.5f + 0.5f * sinf(t * 4.0f + sinf(t * 11.0f) * 2.0f));
+    } else if (g_state == DeviceState::SPEAKING) {
+        g_mic_level = 0.4f + 0.5f * (0.5f + 0.5f * sinf(t * 7.0f + sinf(t * 13.0f) * 1.5f));
+    } else {
+        g_mic_level = 0.0f;
+    }
+}
+
+// ── Reactor render ──────────────────────────────────────────────────────────
+// The bulk of the per-frame work. Draws (in order, back-to-front):
+//   1. Background fill
+//   2. Outer frame circle
+//   3. Two rotating orbital arcs (one CW, one CCW)
+//   4. Inbound collapsing rings (LISTENING) or outbound expanding rings (SPEAKING)
+//   5. Radial waveform spokes (LISTENING / SPEAKING only)
+//   6. Core circle (outline + filled center, color and size by state)
+void drawReactor(float t) {
+    // Pick the render target — sprite (preferred) or fall back to direct
+    // M5.Display draws if the sprite couldn't allocate. The sprite path
+    // is flicker-free; the fallback strobes mildly during the per-frame
+    // fillRect.
+    auto& gfx = g_reactor_ready ? static_cast<LovyanGFX&>(g_reactor)
+                                : static_cast<LovyanGFX&>(M5.Display);
+
+    if (g_reactor_ready) {
+        // Sprite-relative coordinate system: (0, 0) = top-left of the
+        // reactor band. Center the reactor primitives within the
+        // sprite's height.
+        gfx.fillScreen(COL_BG);
+    } else {
+        gfx.fillRect(0, REACTOR_Y, SCR_W, REACTOR_H, COL_BG);
+    }
+
+    // Coordinate origin: top-left of the reactor band (sprite) or of
+    // the panel (fallback). The center stays at (REACTOR_CX, mid-of-band).
+    const int cx = REACTOR_CX;
+    const int cy = g_reactor_ready ? (REACTOR_H / 2 - 4)
+                                   : REACTOR_CY;
+
+    // 1. Outer frame circle (R≈86 — fits inside the band with a bit of margin)
+    gfx.drawCircle(cx, cy, 86, COL_DIM);
+
+    // 2. Rotating orbital arcs.
+    // Outer arc — primary color, 270° span, slow rotation (full turn = 16s in idle,
+    // 3s in thinking — we sweep faster while thinking like the prototype).
+    float spin_period_s = (g_state == DeviceState::THINKING) ? 3.0f : 16.0f;
+    float spin_phase    = fmodf(t / spin_period_s, 1.0f);   // 0..1
+    int   outer_start   = (int)(spin_phase * 360.0f) % 360;
+    int   outer_end     = (outer_start + 270) % 360;
+    if (outer_end < outer_start) {
+        // drawArc handles wrap natively when end < start by rendering
+        // [start..360) ∪ [0..end). LovyanGFX accepts either ordering.
+    }
+    // drawArc(x, y, outer_r, inner_r, start_deg, end_deg, color)
+    gfx.drawArc(cx, cy, 76, 75, outer_start, outer_end, COL_PRIMARY);
+    // Knob at the start of the outer arc.
+    {
+        float a = outer_start * (M_PI / 180.0f);
+        int   px = cx + (int)(cosf(a) * 76);
+        int   py = cy + (int)(sinf(a) * 76);
+        gfx.fillCircle(px, py, 2, COL_PRIMARY);
+    }
+
+    // Inner arc — accent color, counter-rotating, 180° span.
+    float spin_period_s2 = (g_state == DeviceState::THINKING) ? 2.4f : 11.0f;
+    float spin_phase2    = fmodf(t / spin_period_s2, 1.0f);
+    int   inner_start    = (360 - (int)(spin_phase2 * 360.0f)) % 360;
+    int   inner_end      = (inner_start + 180) % 360;
+    gfx.drawArc(cx, cy, 60, 59, inner_start, inner_end, COL_ACCENT);
+
+    // 3. State-specific ring animation.
+    if (g_state == DeviceState::LISTENING) {
+        // Three inbound collapsing rings, staggered. Each ring runs a 1.6s
+        // cycle: scale drops from 76 down to ~19. Phase offsets are 0,
+        // 0.533, 1.066s.
+        const float period = 1.6f;
+        for (int i = 0; i < 3; ++i) {
+            float phase = fmodf(t - i * 0.5f, period) / period;
+            if (phase < 0) phase += 1.0f;
+            float r = 76.0f - phase * (76.0f - 19.0f);
+            // Fade out as it reaches the core (last 30% of cycle)
+            if (phase > 0.7f) continue;
+            int ri = (int)r;
+            if (ri > 19) gfx.drawCircle(cx, cy, ri, COL_PRIMARY);
+        }
+    } else if (g_state == DeviceState::SPEAKING) {
+        // Outbound ripples — three rings expanding outward. 2.0s cycle,
+        // staggered, fade as they reach the outer frame.
+        const float period = 2.0f;
+        for (int i = 0; i < 3; ++i) {
+            float phase = fmodf(t - i * 0.65f, period) / period;
+            if (phase < 0) phase += 1.0f;
+            float r = 24.0f + phase * (84.0f - 24.0f);
+            // Fade by skipping the last 20% (couldn't draw partial alpha here)
+            if (phase > 0.8f) continue;
+            int ri = (int)r;
+            if (ri < 84) gfx.drawCircle(cx, cy, ri, COL_ACCENT);
+        }
+    }
+
+    // 4. Radial waveform spokes — only during LISTENING / SPEAKING.
+    if (g_state == DeviceState::LISTENING || g_state == DeviceState::SPEAKING) {
+        constexpr int kSpokes = 24;
+        for (int i = 0; i < kSpokes; ++i) {
+            // Per-spoke amplitude — combines the synthesized mic level with
+            // a per-spoke pseudo-random wobble for that "live" radial fan look.
+            float jitter = 0.5f + 0.5f * sinf(t * (3.0f + (i & 7) * 0.4f) + i);
+            float amp    = g_mic_level * jitter;
+            float a      = (float)i / kSpokes * (2.0f * M_PI);
+            float ca     = cosf(a), sa = sinf(a);
+            if (g_state == DeviceState::LISTENING) {
+                // Inbound: spokes start at the outer ring and point inward,
+                // length grows with amplitude. Primary color.
+                int r2 = 50;
+                int r1 = 50 - (int)(amp * 14.0f) - 3;
+                gfx.drawLine(cx + (int)(ca * r1), cy + (int)(sa * r1),
+                             cx + (int)(ca * r2), cy + (int)(sa * r2),
+                             COL_PRIMARY);
+            } else {
+                // Outbound: spokes radiate from the core outward. Accent color.
+                int r1 = 22;
+                int r2 = 22 + (int)(amp * 18.0f) + 3;
+                gfx.drawLine(cx + (int)(ca * r1), cy + (int)(sa * r1),
+                             cx + (int)(ca * r2), cy + (int)(sa * r2),
+                             COL_ACCENT);
+            }
+        }
+    }
+
+    // 5. Core. Outline circle + filled center; size + color by state.
+    bool resp = (g_state == DeviceState::SPEAKING);
+    bool list = (g_state == DeviceState::LISTENING);
+    bool err  = (g_state == DeviceState::ERROR);
+    uint16_t coreCol = err ? COL_DANGER : (resp ? COL_ACCENT : COL_PRIMARY);
+    gfx.drawCircle(cx, cy, 20, coreCol);
+    int innerR = resp ? 12 : (list ? 5 : 7);
+    gfx.fillCircle(cx, cy, innerR, coreCol);
+
+    // Push the sprite to the panel in one DMA blit. Direct-draw fallback
+    // already wrote to the panel and skips this step.
+    if (g_reactor_ready) {
+        g_reactor.pushSprite(0, REACTOR_Y);
+    }
+}
+
+// ── Transcript line ─────────────────────────────────────────────────────────
+// Single line above the footer. Idle hint when idle; query echo / response
+// preview / "computing..." when active. Truncated to one line — full
+// response goes through TTS, so the screen text is just an at-a-glance
+// confirmation.
+void drawTranscript() {
+    M5.Display.fillRect(0, TRANSCRIPT_Y, SCR_W, TRANSCRIPT_H, COL_BG);
+    M5.Display.setTextSize(1);
+
+    if (g_state == DeviceState::IDLE) {
+        M5.Display.setTextColor(COL_DIM, COL_BG);
+        const char* hint = "SAY \"HEY JARVIS\"";
+        int w = (int)strlen(hint) * 6;
+        M5.Display.setCursor((SCR_W - w) / 2, TRANSCRIPT_Y + 5);
+        M5.Display.print(hint);
+        return;
+    }
+
+    if (g_state == DeviceState::THINKING) {
+        M5.Display.setTextColor(COL_DIM, COL_BG);
+        M5.Display.setCursor(8, TRANSCRIPT_Y + 5);
+        M5.Display.print("> ");
+        String q = g_query_text.length() ? g_query_text : String("computing...");
+        if (q.length() > 48) q = q.substring(0, 47) + "..";
+        M5.Display.print(q);
+        return;
+    }
+
+    if (g_state == DeviceState::SPEAKING) {
+        M5.Display.setTextColor(COL_FG, COL_BG);
+        M5.Display.setCursor(8, TRANSCRIPT_Y + 5);
+        String r = g_response_text.length() ? g_response_text
+                                            : (g_query_text.length() ? g_query_text : String());
+        if (r.length() > 48) r = r.substring(0, 47) + "..";
+        M5.Display.print(r);
+        return;
+    }
+
+    if (g_state == DeviceState::LISTENING) {
+        M5.Display.setTextColor(COL_PRIMARY, COL_BG);
+        M5.Display.setCursor(8, TRANSCRIPT_Y + 5);
+        M5.Display.print("LISTENING...");
+        return;
+    }
+
+    if (g_state == DeviceState::ERROR) {
+        M5.Display.setTextColor(COL_DANGER, COL_BG);
+        M5.Display.setCursor(8, TRANSCRIPT_Y + 5);
+        M5.Display.print("ERROR");
+    }
+}
+
+// ── Footer: tier / RSSI / wall-clock ────────────────────────────────────────
+// Always visible. Mirrors the previous boxed-region UI's bottom row so
+// users have at-a-glance connectivity info even while the reactor is up.
+//
+//   [OTA] LAN  -55dBm                         14:32:07
+//
+// Wall clock requires NTP — silently omitted until the system clock is
+// set (Phase 4+ work).
+void drawFooter() {
+    M5.Display.fillRect(0, FOOTER_Y, SCR_W, FOOTER_H, COL_BG);
+    M5.Display.setTextSize(1);
+
+    int x = 6;
+    if (g_ota_active) {
+        M5.Display.setTextColor(COL_ACCENT, COL_BG);
+        M5.Display.setCursor(x, FOOTER_Y + 6);
+        M5.Display.print("OTA ");
+        x += 4 * 6;
+    }
+
+    M5.Display.setTextColor(COL_DIM, COL_BG);
+    M5.Display.setCursor(x, FOOTER_Y + 6);
+    char tier_buf[24];
+    snprintf(tier_buf, sizeof(tier_buf), "%s  %ddBm",
+             g_wifi_tier.length() ? g_wifi_tier.c_str() : "...",
+             g_wifi_rssi);
+    M5.Display.print(tier_buf);
+
+    // Right side: wall-clock if NTP is up.
+    struct tm t;
+    if (getLocalTime(&t, /*timeoutMs=*/0)) {
+        char clk[9];
+        strftime(clk, sizeof(clk), "%H:%M:%S", &t);
+        // 8 chars × 6 px = 48 px; right-align with 6 px margin
+        M5.Display.setCursor(SCR_W - 48 - 6, FOOTER_Y + 6);
+        M5.Display.print(clk);
+    }
+}
+}  // namespace
+
+// ── Public API ──────────────────────────────────────────────────────────────
+void Display::begin() {
+    M5.Display.setTextWrap(false);
+    M5.Display.fillScreen(COL_BG);
+
+    // Allocate the reactor sprite. 16bpp keeps the size small (~113 KB
+    // for 320×178) so it can live in internal SRAM if available; LGFX
+    // falls back to PSRAM when not. On allocation failure we draw
+    // straight to the panel (with mild flicker — see drawReactor).
+    g_reactor.setColorDepth(16);
+    if (g_reactor.createSprite(SCR_W, REACTOR_H)) {
+        g_reactor_ready = true;
+        g_reactor.fillScreen(COL_BG);
+        Serial.printf("[Display] reactor sprite OK 16bpp %dx%d (%u bytes)\n",
+                      SCR_W, REACTOR_H, (unsigned)(SCR_W * REACTOR_H * 2));
+    } else {
+        Serial.println("[Display] reactor sprite alloc FAILED — falling back to direct draw");
+    }
+
+    drawChrome();
+    drawTranscript();
+    drawFooter();
+    // Reactor paints on the first tickWaveform() — set last_frame_ms to
+    // 0 so the first call paints immediately.
+    g_last_frame_ms = 0;
+}
+
+void Display::setStatus(DeviceState state) {
+    if (state != g_state) {
+        g_state = state;
+        // State change: clear transcript text on transitions back to idle,
+        // and keep otherwise — showTranscript / showResponse repopulate.
+        if (state == DeviceState::IDLE) {
+            g_query_text    = "";
+            g_response_text = "";
+        }
+        drawChrome();      // updates the state label
+        drawTranscript();  // refreshes idle hint / transcript visibility
+    }
+}
+
 void Display::tickWaveform() {
-    bool speaking = (g_current_state == DeviceState::SPEAKING);
-
-    // Edge case: speaking → not speaking. Erase the strip back to black
-    // exactly once, then leave it alone until the next SPEAKING entry.
-    if (g_wave_was_speaking && !speaking) {
-        M5.Display.fillRect(0, WAVE_Y, SCR_W, WAVE_H, TFT_BLACK);
-        g_wave_was_speaking = false;
-        return;
-    }
-    if (!speaking) return;
-
-    // Throttle to ~10 Hz. millis() wraparound is harmless because we
-    // compare with subtraction (uint32_t arithmetic).
     uint32_t now = millis();
-    if (g_wave_was_speaking && (now - g_wave_last_frame_ms) < WAVE_FRAME_MS) {
-        return;
-    }
-    g_wave_last_frame_ms = now;
-    g_wave_was_speaking  = true;
+    if (now - g_last_frame_ms < kFrameMs) return;
+    g_last_frame_ms = now;
 
-    // xorshift32 — cheap and chaotic enough for waveform jitter.
-    auto rand32 = [](uint32_t& s) {
-        s ^= s << 13;
-        s ^= s >> 17;
-        s ^= s << 5;
-        return s;
-    };
-
-    // Wipe the band, then draw connected line segments across the
-    // width. Each point's Y is centerline ± a random offset; drawing
-    // line(prev, curr) gives a continuous oscilloscope-style trace.
-    M5.Display.fillRect(0, WAVE_Y, SCR_W, WAVE_H, TFT_BLACK);
-
-    int prev_x = 0;
-    uint32_t r0 = rand32(g_wave_seed);
-    int prev_y = WAVE_MID + (int)((r0 % (uint32_t)(WAVE_AMPLITUDE * 2 + 1))) - WAVE_AMPLITUDE;
-
-    for (int i = 1; i <= WAVE_POINTS; ++i) {
-        int x = i * WAVE_DX;
-        if (x >= SCR_W) x = SCR_W - 1;
-        uint32_t r = rand32(g_wave_seed);
-        int y = WAVE_MID
-              + (int)((r % (uint32_t)(WAVE_AMPLITUDE * 2 + 1))) - WAVE_AMPLITUDE;
-        M5.Display.drawLine(prev_x, prev_y, x, y, TFT_GREEN);
-        prev_x = x;
-        prev_y = y;
-    }
+    float t = now * 0.001f;
+    synthMicLevel(t);
+    drawReactor(t);
 }
 
 void Display::updateBattery(int level, bool charging) {
     g_battery_level    = level;
     g_battery_charging = charging;
-
-    // Wipe just the battery region (icon + pct text) with the current
-    // state's bg, then redraw. Avoid touching the rest of the status bar.
-    const StateStyle& s = kStyles[static_cast<int>(g_current_state)];
-    int wipe_x = BATT_PCT_X;
-    int wipe_w = (BATT_TIP_X + BATT_TIP_W) - BATT_PCT_X;
-    M5.Display.fillRect(wipe_x, STATUS_Y, wipe_w, STATUS_H, s.bg);
     drawBattery();
 }
 
 void Display::showTranscript(const String& text) {
-    M5.Display.fillRect(0, TRANS_Y, SCR_W, TRANS_H, TFT_BLACK);
-    M5.Display.setTextSize(1);
-    M5.Display.setTextWrap(true);
-    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.setCursor(4, TRANS_Y + 4);
-    M5.Display.print(text);
-    M5.Display.setTextWrap(false);
+    g_query_text = text;
+    drawTranscript();
 }
 
 void Display::showResponse(const String& text) {
-    M5.Display.fillRect(0, RESP_Y, SCR_W, RESP_H, TFT_BLACK);
-    M5.Display.setTextSize(2);
-    M5.Display.setTextWrap(true);
-    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-    M5.Display.setCursor(4, RESP_Y + 4);
-    M5.Display.print(text);
-    M5.Display.setTextWrap(false);
+    g_response_text = text;
+    drawTranscript();
 }
 
 void Display::updateFooter(const String& tier, int rssi) {
-    // Cache and repaint the status-bar wifi icon. Wipe just the icon
-    // region (no need to redraw the whole bar) using the current state's
-    // bg colour, then drawWifi() repaints in the matching foreground.
     g_wifi_tier = tier;
     g_wifi_rssi = rssi;
-    {
-        const StateStyle& s = kStyles[static_cast<int>(g_current_state)];
-        M5.Display.fillRect(WIFI_X, STATUS_Y, WIFI_W, STATUS_H, s.bg);
-        drawWifi();
-    }
-
-    M5.Display.fillRect(0, FOOT_Y, SCR_W, FOOT_H, TFT_BLACK);
-    M5.Display.setTextSize(1);
-
-    // Left: optional OTA badge (yellow, attention colour) then tier+RSSI.
-    int x = 4;
-    if (g_ota_active) {
-        M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
-        M5.Display.setCursor(x, FOOT_Y + (FOOT_H - 8) / 2);
-        M5.Display.print("OTA ");
-        x += 4 * 6;  // "OTA " = 4 chars × 6 px @ textSize=1
-    }
-    M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    M5.Display.setCursor(x, FOOT_Y + (FOOT_H - 8) / 2);
-    M5.Display.printf("%s  %ddBm", tier.c_str(), rssi);
-
-    // Right: wall-clock (requires NTP; silently omitted until Phase 4+ wires it up)
-    struct tm t;
-    if (getLocalTime(&t, /*timeoutMs=*/0)) {
-        char buf[9];
-        strftime(buf, sizeof(buf), "%H:%M:%S", &t);
-        // 8 chars × 6px/char (textSize=1) = 48px; right-align with 4px margin
-        M5.Display.setCursor(SCR_W - 48 - 4, FOOT_Y + (FOOT_H - 8) / 2);
-        M5.Display.print(buf);
-    }
+    drawWifi();
+    drawFooter();
 }
 
 void Display::setOtaActive(bool active) {
     if (g_ota_active == active) return;
     g_ota_active = active;
-    // Repaint the footer using the cached tier+rssi so the badge
-    // appears/disappears immediately. WiFi icon is wiped+redrawn as a
-    // side effect of updateFooter(), but tier/rssi don't change so the
-    // visible result is the same.
-    updateFooter(g_wifi_tier, g_wifi_rssi);
+    drawChrome();
+}
+
+void Display::setBrightness(int v) {
+    if (v < 10)  v = 10;
+    if (v > 255) v = 255;
+    M5.Display.setBrightness(static_cast<uint8_t>(v));
+}
+
+void Display::drawConfigScreen() {
+    // Bypass the reactor entirely. Static screen, painted once on entry
+    // to Config mode (ModeManager pauses the voice loop while up).
+    M5.Display.fillScreen(rgb565(0x04, 0x06, 0x0A));
+    M5.Display.setTextDatum(top_left);
+
+    M5.Display.setTextColor(COL_PRIMARY);
+    M5.Display.setTextSize(2);
+    M5.Display.setCursor(60, 20);
+    M5.Display.print("CONFIG MODE");
+
+    M5.Display.setTextColor(COL_FG);
+    M5.Display.setTextSize(1);
+    M5.Display.setCursor(20, 70);
+    M5.Display.print("Connect phone to WiFi:");
+
+    M5.Display.setTextSize(2);
+    M5.Display.setCursor(40, 100);
+    M5.Display.setTextColor(COL_ACCENT);
+    M5.Display.print("Jarvis-Setup");
+
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(COL_FG);
+    M5.Display.setCursor(20, 150);
+    M5.Display.print("Then open in browser:");
+    M5.Display.setCursor(40, 170);
+    M5.Display.setTextColor(COL_ACCENT);
+    M5.Display.print("http://192.168.4.1");
+
+    M5.Display.setTextColor(COL_DIM);
+    M5.Display.setCursor(40, 220);
+    M5.Display.print("Hold screen 2s to exit");
 }
 
 }  // namespace jarvis::hal

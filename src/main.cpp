@@ -9,10 +9,12 @@
 // All callbacks set flags only — see hal/LLMModule.h and app/state_machine.h.
 
 #include <Arduino.h>
+#include <LittleFS.h>
 #include <M5Unified.h>
 #include <esp_task_wdt.h>
 
 #include "app/IntentRouter.h"
+#include "app/ModeManager.h"
 #include "app/NVSConfig.h"
 #include "app/state_machine.h"
 #include "config.h"
@@ -20,6 +22,7 @@
 #include "hal/Display.h"
 #include "hal/LLMModule.h"
 #include "hal/SdLogger.h"
+#include "net/CaptivePortal.h"
 #include "net/HAClient.h"
 #include "net/LLMClient.h"
 #include "net/MqttClient.h"
@@ -122,6 +125,20 @@ void setup() {
                   (int)M5.Power.isCharging());
 
     jarvis::hal::Display::begin();
+    jarvis::hal::Display::setBrightness(jarvis::NVSConfig::getBrightness());
+
+    // LittleFS mount — hosts the captive-portal web UI under /web/.
+    // Format-on-failure so a freshly-flashed device still works (an
+    // empty FS just means /api/* responds but the UI can't load until
+    // `pio run --target uploadfs` is run). Failure is logged but not
+    // fatal — Normal mode (voice loop) doesn't need the FS.
+    if (!LittleFS.begin(/*formatOnFail=*/true)) {
+        Serial.println("[FS] LittleFS mount FAILED");
+    } else {
+        Serial.printf("[FS] LittleFS OK  used=%u/%u bytes\n",
+                      (unsigned)LittleFS.usedBytes(),
+                      (unsigned)LittleFS.totalBytes());
+    }
 
     // SD logger: best-effort. Mount failure (no card / unformatted) is
     // logged once and silently ignored thereafter — voice loop still runs.
@@ -218,6 +235,10 @@ void setup() {
         g_module.finishSpeaking();
     });
 
+    // Mode manager: starts in Normal. Long-press on the touchscreen
+    // toggles to Config mode (captive portal at 192.168.4.1).
+    jarvis::app::ModeManager::begin();
+
     Serial.printf("[READY] Say \"%s\" to wake.\n", jarvis::config::kWakeWord);
 
     // Hardware watchdog: panics + reboots if loop() goes silent for
@@ -239,6 +260,21 @@ void loop() {
     // Feed the watchdog at the top of every iteration. Anything below
     // that hangs longer than kWatchdogTimeoutSec triggers a panic-reboot.
     esp_task_wdt_reset();
+
+    M5.update();  // refreshes M5.Touch state for ModeManager's long-press
+
+    // Mode toggling — handles long-press detection, exit-flag from web
+    // UI, and inactivity auto-exit. Cheap when nothing changes.
+    jarvis::app::ModeManager::tick();
+
+    if (jarvis::app::ModeManager::isConfig()) {
+        // Config mode: voice pipeline is paused. Only service the
+        // captive portal's DNS catch-all and refresh the battery
+        // indicator (display is owned by drawConfigScreen()).
+        jarvis::net::CaptivePortal::tick();
+        refreshBattery();
+        return;
+    }
 
     g_module.update();
     jarvis::hal::AudioPlayer::tick();

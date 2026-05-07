@@ -242,6 +242,121 @@ bool NVSConfig::setMqttPass(const String& pass) {
     return ok;
 }
 
+// ── Captive-portal-surfaced tunables ──────────────────────────────────────
+// Stored as Int/Bool/String in the same "jarvis" namespace. Keys ≤15 chars.
+// Default values mirror the schema in app/ConfigSchema.cpp.
+
+int NVSConfig::getTtsVolume() {
+    Preferences p; p.begin(NS, true);
+    int v = p.getInt("tts_volume", 70);
+    p.end();
+    return v;
+}
+bool NVSConfig::setTtsVolume(int pct) {
+    if (pct < 0 || pct > 100) return false;
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putInt("tts_volume", pct) > 0;
+    p.end();
+    return ok;
+}
+
+int NVSConfig::getWakeSens() {
+    Preferences p; p.begin(NS, true);
+    int v = p.getInt("wake_sens", 5);
+    p.end();
+    return v;
+}
+bool NVSConfig::setWakeSens(int v) {
+    if (v < 1 || v > 10) return false;
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putInt("wake_sens", v) > 0;
+    p.end();
+    return ok;
+}
+
+int NVSConfig::getMicGain() {
+    Preferences p; p.begin(NS, true);
+    int v = p.getInt("mic_gain", 50);
+    p.end();
+    return v;
+}
+bool NVSConfig::setMicGain(int pct) {
+    if (pct < 0 || pct > 100) return false;
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putInt("mic_gain", pct) > 0;
+    p.end();
+    return ok;
+}
+
+String NVSConfig::getDefaultTier() {
+    Preferences p; p.begin(NS, true);
+    String s = p.getString("default_tier", "auto");
+    p.end();
+    return s;
+}
+bool NVSConfig::setDefaultTier(const String& tier) {
+    if (tier != "auto" && tier != "local" && tier != "cloud" && tier != "qwen") return false;
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("default_tier", tier) > 0;
+    p.end();
+    return ok;
+}
+
+int NVSConfig::getRouteTimeout() {
+    Preferences p; p.begin(NS, true);
+    int v = p.getInt("route_timeout", 3000);
+    p.end();
+    return v;
+}
+bool NVSConfig::setRouteTimeout(int ms) {
+    if (ms < 500 || ms > 10000) return false;
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putInt("route_timeout", ms) > 0;
+    p.end();
+    return ok;
+}
+
+bool NVSConfig::getLogToSd() {
+    Preferences p; p.begin(NS, true);
+    bool v = p.getBool("log_to_sd", true);
+    p.end();
+    return v;
+}
+bool NVSConfig::setLogToSd(bool on) {
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putBool("log_to_sd", on);
+    p.end();
+    return ok;
+}
+
+int NVSConfig::getBrightness() {
+    Preferences p; p.begin(NS, true);
+    int v = p.getInt("brightness", 180);
+    p.end();
+    return v;
+}
+bool NVSConfig::setBrightness(int v) {
+    if (v < 10 || v > 255) return false;
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putInt("brightness", v) > 0;
+    p.end();
+    return ok;
+}
+
+int NVSConfig::getSleepSecs() {
+    Preferences p; p.begin(NS, true);
+    int v = p.getInt("sleep_secs", 60);
+    p.end();
+    return v;
+}
+bool NVSConfig::setSleepSecs(int s) {
+    if (s < 0 || s > 600) return false;
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putInt("sleep_secs", s) > 0;
+    p.end();
+    return ok;
+}
+
 // Apply a parsed JSON object to NVS. Each present key writes; absent keys
 // are skipped. Returns true if at least one key was applied. Logs every
 // applied key (without echoing secrets — token shows length only).

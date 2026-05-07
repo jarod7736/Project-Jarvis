@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jarvis · Setup</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">JARVIS<span class="dot"></span>SETUP</div>
+  <div class="meta" id="meta">v0.1 · 192.168.4.1</div>
+</header>
+
+<main>
+
+  <div class="banner" id="apBanner">
+    AP MODE · Connected to <strong>Jarvis-Setup</strong> · Voice pipeline paused
+  </div>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="status">Status</button>
+    <button class="tab" data-tab="wifi">WiFi</button>
+    <button class="tab" data-tab="audio" data-cat="audio">Audio</button>
+    <button class="tab" data-tab="routing" data-cat="routing">Routing</button>
+    <button class="tab" data-tab="network" data-cat="network">Network</button>
+    <button class="tab" data-tab="display" data-cat="display">Display</button>
+  </nav>
+
+  <!-- STATUS -->
+  <section class="panel active" data-panel="status">
+    <div class="status-grid" id="statusGrid">
+      <!-- populated by JS -->
+    </div>
+    <div class="section">
+      <h2><span>::</span> Actions</h2>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button class="btn" id="exitBtn">Exit Config Mode</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- WIFI -->
+  <section class="panel" data-panel="wifi">
+    <div class="section">
+      <h2><span>::</span> Saved Networks</h2>
+      <div class="wifi-list" id="savedList">
+        <div class="empty">Loading...</div>
+      </div>
+    </div>
+    <div class="section">
+      <h2><span>::</span> Available Networks
+        <button class="btn ghost mini" id="rescanBtn">Rescan</button>
+      </h2>
+      <div class="wifi-list" id="scanList">
+        <div class="empty">Tap Rescan to search for networks</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Schema-driven panels: rendered by JS into #panel-{cat} -->
+  <section class="panel" data-panel="audio">
+    <div class="section"><h2><span>::</span> Audio</h2><div id="panel-audio"></div></div>
+  </section>
+  <section class="panel" data-panel="routing">
+    <div class="section"><h2><span>::</span> Intelligence Routing</h2><div id="panel-routing"></div></div>
+  </section>
+  <section class="panel" data-panel="network">
+    <div class="section"><h2><span>::</span> Endpoints</h2><div id="panel-network"></div></div>
+  </section>
+  <section class="panel" data-panel="display">
+    <div class="section"><h2><span>::</span> Display</h2><div id="panel-display"></div></div>
+  </section>
+
+</main>
+
+<!-- WiFi password modal -->
+<div class="modal" id="wifiModal">
+  <div class="modal-card">
+    <h3 id="wifiModalTitle">Connect to Network</h3>
+    <p style="font-size: 12px; color: var(--ink-dim); margin-top: 0;" id="wifiModalSsid">SSID</p>
+    <input type="password" id="wifiPassword" placeholder="Password" autocomplete="off">
+    <div style="display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end;">
+      <button class="btn ghost" id="wifiCancel">Cancel</button>
+      <button class="btn" id="wifiSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast notifications -->
+<div class="toast" id="toast"></div>
+
+<!-- Save bar (appears when there are unsaved changes) -->
+<div class="savebar" id="savebar">
+  <div class="status" id="saveStatus">Unsaved changes</div>
+  <div style="display: flex; gap: 8px;">
+    <button class="btn ghost" id="discardBtn">Discard</button>
+    <button class="btn" id="saveBtn">Save</button>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

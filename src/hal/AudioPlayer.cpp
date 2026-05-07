@@ -7,6 +7,8 @@
 #include <AudioGeneratorMP3.h>
 #include <AudioOutput.h>
 
+#include "../app/NVSConfig.h"
+
 namespace jarvis::hal {
 
 namespace {
@@ -146,7 +148,24 @@ bool AudioPlayer::begin() {
     Serial.printf("[AudioPlayer] ready (sample_rate=%u, vch=%u)\n",
                   (unsigned)kSampleRate, (unsigned)kVirtualChannel);
     g_ok = true;
+
+    // Pick up the NVS-stored volume immediately. Default is 70 (per
+    // ConfigSchema). Setting after g_ok so a stale call before begin
+    // succeeded couldn't accidentally hit a half-initialised speaker.
+    setVolume(jarvis::NVSConfig::getTtsVolume());
     return true;
+}
+
+void AudioPlayer::setVolume(int pct) {
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+    // M5.Speaker.setVolume takes 0–255. Linear map: 0% → silent,
+    // 100% → full output. The amplifier on CoreS3 saturates well
+    // before 255 so values above ~200 are mostly cosmetic, but the
+    // schema's 0–100 range is the user-facing knob and we honor it
+    // proportionally rather than imposing our own ceiling.
+    uint8_t m5_vol = static_cast<uint8_t>((pct * 255) / 100);
+    M5.Speaker.setVolume(m5_vol);
 }
 
 bool AudioPlayer::ok() { return g_ok; }
