@@ -61,6 +61,16 @@ public:
     static String getOtaPass();
     static bool   setOtaPass(const String& pass);
 
+    // MQTT (Phase 7). `mqtt_host` is the broker host or IP (HA Mosquitto
+    // add-on default). When empty, MqttClient stays disabled. `mqtt_user`
+    // / `mqtt_pass` are the broker credentials — secrets, never echoed.
+    static String getMqttHost();
+    static bool   setMqttHost(const String& host);
+    static String getMqttUser();
+    static bool   setMqttUser(const String& user);
+    static String getMqttPass();
+    static bool   setMqttPass(const String& pass);
+
     // Blocks reading USB Serial up to `timeoutMs` for a single JSON line.
     // The provisioning JSON is a bag of optional fields:
     //   {"ssid":"...", "pass":"...", "ha_token":"...", "ha_host":"..."}

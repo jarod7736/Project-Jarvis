@@ -22,6 +22,7 @@
 #include "hal/SdLogger.h"
 #include "net/HAClient.h"
 #include "net/LLMClient.h"
+#include "net/MqttClient.h"
 #include "net/OtaService.h"
 #include "net/WiFiManager.h"
 
@@ -156,14 +157,16 @@ void setup() {
     // combination of ssid, pass, ha_token, ha_host, oc_key, oc_host,
     // tts_*, ota_pass, fw_url. Once every gated key is set, the window
     // stops opening at boot — provisioning is one-and-done.
-    bool need_ha  = (jarvis::NVSConfig::getHaToken().length() == 0);
-    bool need_oc  = (jarvis::NVSConfig::getOcKey().length()   == 0);
-    bool need_ota = (jarvis::NVSConfig::getOtaPass().length() == 0);
-    if (wifi_ok && (need_ha || need_oc || need_ota)) {
-        Serial.printf("[PROV] Missing creds: ha_token=%s oc_key=%s ota_pass=%s\n",
-                      need_ha  ? "MISSING" : "set",
-                      need_oc  ? "MISSING" : "set",
-                      need_ota ? "MISSING" : "set");
+    bool need_ha   = (jarvis::NVSConfig::getHaToken().length() == 0);
+    bool need_oc   = (jarvis::NVSConfig::getOcKey().length()   == 0);
+    bool need_ota  = (jarvis::NVSConfig::getOtaPass().length() == 0);
+    bool need_mqtt = (jarvis::NVSConfig::getMqttHost().length() == 0);
+    if (wifi_ok && (need_ha || need_oc || need_ota || need_mqtt)) {
+        Serial.printf("[PROV] Missing creds: ha_token=%s oc_key=%s ota_pass=%s mqtt_host=%s\n",
+                      need_ha   ? "MISSING" : "set",
+                      need_oc   ? "MISSING" : "set",
+                      need_ota  ? "MISSING" : "set",
+                      need_mqtt ? "MISSING" : "set");
         Serial.println("[PROV] Send JSON now, or skip and those services error.");
         jarvis::NVSConfig::provisionFromSerial(30000);
     }
@@ -180,6 +183,13 @@ void setup() {
     // path is lost on the next flash.
     if (wifi_ok) {
         jarvis::net::OtaService::begin();
+    }
+
+    // Phase 7 MQTT: publishes jarvis/state on every FSM transition,
+    // subscribes to jarvis/command. Disabled if NVS `mqtt_host` is
+    // empty. Reconnects non-blocking from tick() per PLAN.md:691.
+    if (wifi_ok) {
+        jarvis::net::MqttClient::begin();
     }
 
     // M5Bus UART: 115200 8N1. Pins resolved at runtime via Port C — they
@@ -233,6 +243,7 @@ void loop() {
     g_module.update();
     jarvis::hal::AudioPlayer::tick();
     jarvis::net::OtaService::tick();
+    jarvis::net::MqttClient::tick();
     jarvis::app::tickStateMachine();
     refreshFooterIfIdle();
     refreshBattery();

@@ -194,6 +194,54 @@ bool NVSConfig::setOtaPass(const String& pass) {
     return ok;
 }
 
+String NVSConfig::getMqttHost() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("mqtt_host", "");
+    p.end();
+    return s;
+}
+
+bool NVSConfig::setMqttHost(const String& host) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("mqtt_host", host) > 0;
+    p.end();
+    return ok;
+}
+
+String NVSConfig::getMqttUser() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("mqtt_user", "");
+    p.end();
+    return s;
+}
+
+bool NVSConfig::setMqttUser(const String& user) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("mqtt_user", user) > 0;
+    p.end();
+    return ok;
+}
+
+String NVSConfig::getMqttPass() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("mqtt_pass", "");
+    p.end();
+    return s;
+}
+
+bool NVSConfig::setMqttPass(const String& pass) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("mqtt_pass", pass) > 0;
+    p.end();
+    return ok;
+}
+
 // Apply a parsed JSON object to NVS. Each present key writes; absent keys
 // are skipped. Returns true if at least one key was applied. Logs every
 // applied key (without echoing secrets — token shows length only).
@@ -282,6 +330,9 @@ static bool applyProvisioningJson(const JsonDocument& doc) {
         {"tts_model",    false, &NVSConfig::setTtsModel},
         {"fw_url",       false, &NVSConfig::setFwUrl},
         {"ota_pass",     true,  &NVSConfig::setOtaPass},
+        {"mqtt_host",    false, &NVSConfig::setMqttHost},
+        {"mqtt_user",    false, &NVSConfig::setMqttUser},
+        {"mqtt_pass",    true,  &NVSConfig::setMqttPass},
     };
     for (const auto& f : string_fields) {
         JsonVariantConst v = doc[f.json];

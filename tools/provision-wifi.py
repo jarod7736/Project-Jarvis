@@ -11,6 +11,7 @@ Examples:
     python3 tools/provision-wifi.py                    # WiFi only (default)
     python3 tools/provision-wifi.py --ota              # WiFi + OTA password / firmware URL
     python3 tools/provision-wifi.py --no-wifi --ota    # OTA only (WiFi already set)
+    python3 tools/provision-wifi.py --no-wifi --mqtt   # MQTT broker host + creds
 
 Filename kept as provision-wifi.py for back-compat with prior phases; the
 script now provisions any subset of the bag-of-keys JSON the device's
@@ -35,6 +36,8 @@ def main() -> int:
                    help="Skip SSID/password prompts")
     p.add_argument("--ota", action="store_true",
                    help="Also prompt for ota_pass + fw_url (Phase 7 OTA)")
+    p.add_argument("--mqtt", action="store_true",
+                   help="Also prompt for mqtt_host + mqtt_user + mqtt_pass (Phase 7 MQTT)")
     args = p.parse_args()
 
     payload: dict[str, str] = {}
@@ -57,6 +60,17 @@ def main() -> int:
         if fw_url:
             payload["fw_url"] = fw_url
 
+    if args.mqtt:
+        mqtt_host = input("MQTT broker host (mqtt_host, blank to skip): ").strip()
+        if mqtt_host:
+            payload["mqtt_host"] = mqtt_host
+        mqtt_user = input("MQTT username (mqtt_user, blank for anonymous): ").strip()
+        if mqtt_user:
+            payload["mqtt_user"] = mqtt_user
+            mqtt_pass = getpass.getpass("MQTT password (mqtt_pass, blank to skip): ")
+            if mqtt_pass:
+                payload["mqtt_pass"] = mqtt_pass
+
     if not payload:
         print("error: nothing to send (use --ota and/or omit --no-wifi)", file=sys.stderr)
         return 2
@@ -71,7 +85,7 @@ def main() -> int:
         return 1
 
     # Echo back what we sent — secrets shown as <set> only.
-    secret_keys = {"pass", "ota_pass", "ha_token", "oc_key", "tts_api_key"}
+    secret_keys = {"pass", "ota_pass", "ha_token", "oc_key", "tts_api_key", "mqtt_pass"}
     redacted = {k: ("<set>" if k in secret_keys else v) for k, v in payload.items()}
     print(f"wrote {len(line)} bytes to {args.device}: {json.dumps(redacted)}")
     return 0

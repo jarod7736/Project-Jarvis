@@ -137,6 +137,24 @@ constexpr const char* kOtaSpeakStart  = "Updating firmware now. Back in a minute
 constexpr const char* kOtaSpeakNoUrl  = "Firmware URL is not configured.";
 constexpr const char* kOtaSpeakFailed = "Firmware update failed.";
 
+// ── MQTT (PLAN.md Phase 7) ────────────────────────────────────────────────
+// HA Mosquitto add-on default: port 1883, authenticated. Broker host
+// lives in NVS as `mqtt_host` (parity with `ha_host` / `oc_host`).
+// Empty host → service disabled, no reconnect attempts.
+constexpr uint16_t    kMqttPort         = 1883;
+constexpr const char* kMqttClientIdBase = "jarvis";   // suffixed with MAC tail
+constexpr const char* kMqttTopicState   = "jarvis/state";
+constexpr const char* kMqttTopicCommand = "jarvis/command";
+// Last-Will payload published by the broker if the device drops without
+// a clean disconnect — lets HA automations detect a stuck/crashed Jarvis.
+constexpr const char* kMqttLwtPayload   = "OFFLINE";
+// Reconnect cadence per PLAN.md:691 — 30 s, non-blocking. Tracked
+// against millis() in MqttClient::tick(); never sleeps the loop.
+constexpr uint32_t    kMqttReconnectMs  = 30000;
+// PubSubClient's default keepalive is 15s; bump to 60 so we don't churn
+// on every routine probe.
+constexpr uint16_t    kMqttKeepaliveSec = 60;
+
 // ── Hardware watchdog (PLAN.md Phase 7) ───────────────────────────────────
 // 30 s timeout. Generous on purpose: a normal voice cycle is 1–6 s end to
 // end, but cloud TTS+LLM can stretch to 10+ s on a slow link. The watchdog

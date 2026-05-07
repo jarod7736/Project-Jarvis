@@ -4,6 +4,7 @@
 
 #include "../config.h"
 #include "../hal/SdLogger.h"
+#include "../net/MqttClient.h"
 #include "../net/WiFiManager.h"
 #include "IntentRouter.h"
 
@@ -37,6 +38,7 @@ void enterIdle() {
     g_listen_deadline_ms = 0;
     Display::setStatus(DeviceState::IDLE);
     Serial.println("[FSM] -> IDLE");
+    jarvis::net::MqttClient::publishState("IDLE");
 }
 
 void enterListening() {
@@ -50,12 +52,14 @@ void enterListening() {
     Display::setStatus(DeviceState::LISTENING);
     Display::showTranscript("");
     Serial.println("[FSM] -> LISTENING");
+    jarvis::net::MqttClient::publishState("LISTENING");
 }
 
 void enterTranscribing() {
     g_state = DeviceState::THINKING;  // shown as THINKING (yellow) on display
     Display::setStatus(DeviceState::THINKING);
     Serial.println("[FSM] -> TRANSCRIBING (THINKING)");
+    jarvis::net::MqttClient::publishState("THINKING");
 }
 
 void enterSpeaking(const String& text) {
@@ -63,6 +67,7 @@ void enterSpeaking(const String& text) {
     Display::setStatus(DeviceState::SPEAKING);
     Display::showResponse(text);
     Serial.printf("[FSM] -> SPEAKING (\"%s\")\n", text.c_str());
+    jarvis::net::MqttClient::publishState("SPEAKING");
     g_module->speak(text);
 }
 
@@ -113,6 +118,26 @@ void tickStateMachine() {
 
     switch (g_state) {
         case DeviceState::IDLE: {
+            // MQTT-pushed commands take priority over wake-word: if HA is
+            // sending us a directive, we shouldn't make the user say
+            // "HELLO" first. Skip LISTENING entirely and dispatch as if
+            // it were a final ASR transcript. mqtt_command_text empty
+            // means no command queued; popPendingCommand() drains the
+            // single-slot buffer in MqttClient.
+            String mqtt_cmd = jarvis::net::MqttClient::popPendingCommand();
+            if (mqtt_cmd.length() > 0) {
+                Serial.printf("[FSM] mqtt command: \"%s\"\n", mqtt_cmd.c_str());
+                enterTranscribing();
+                auto tier = jarvis::net::WiFiManager::getConnectivityTier();
+                uint32_t t0 = millis();
+                RouteResult result = jarvis::app::route(mqtt_cmd, tier);
+                uint32_t latency_ms = millis() - t0;
+                jarvis::hal::SdLogger::logExchange(
+                    mqtt_cmd, result.spoken,
+                    jarvis::net::tierName(tier), latency_ms);
+                enterSpeaking(result.spoken);
+                break;
+            }
             if (g_kws_fired) {
                 g_kws_fired = false;
                 enterListening();
