@@ -4,6 +4,7 @@
 
 #include "../config.h"
 #include "../hal/LLMModule.h"
+#include "../net/AnthropicClient.h"
 #include "../net/LLMClient.h"
 #include "../net/OtaService.h"
 #include "../net/WiFiManager.h"
@@ -175,19 +176,34 @@ RouteResult dispatchByIntent(const String& transcript, const String& intent,
         return {false, String(jarvis::config::kOtaSpeakFailed)};
     }
     if (intent == "local_llm" || intent == "claude") {
-        // Phase 6: dispatch to OpenClaw. Tier-gate first — both LAN and
-        // TAILSCALE tiers have OC reachable. HOTSPOT_ONLY and OFFLINE
-        // don't, so we don't even try (saves the user a 5s hang waiting
-        // for HTTP -1).
+        // Tier-gate: both LAN and TAILSCALE have OpenClaw reachable;
+        // claude-direct (api.anthropic.com) needs LAN. HOTSPOT_ONLY
+        // and OFFLINE bail out so we don't burn 5+ seconds on a doomed
+        // HTTP attempt.
         if (tier != jarvis::net::ConnectivityTier::LAN &&
             tier != jarvis::net::ConnectivityTier::TAILSCALE) {
             return {false, String("I can't reach my brain right now.")};
         }
-        const char* model = (intent == "claude")
-                                ? jarvis::config::kOcClaudeModel
-                                : jarvis::config::kOcLocalModel;
-        String reply = jarvis::net::LLMClient::query(
-            query.length() ? query : transcript, model);
+
+        const String& prompt = query.length() ? query : transcript;
+        String reply;
+
+        // Direct Anthropic API path. Active only for the "claude"
+        // intent and only when the user has set anth_key in NVS via
+        // the captive portal (or USB-Serial provisioning). Otherwise
+        // we fall through to LM Studio / OpenClaw with the
+        // kOcClaudeModel string — which today is unloaded on the
+        // user's LM Studio and will fail, but the structure is in
+        // place for future proxying.
+        if (intent == "claude" && jarvis::net::AnthropicClient::isConfigured()) {
+            reply = jarvis::net::AnthropicClient::query(prompt);
+        } else {
+            const char* model = (intent == "claude")
+                                    ? jarvis::config::kOcClaudeModel
+                                    : jarvis::config::kOcLocalModel;
+            reply = jarvis::net::LLMClient::query(prompt, model);
+        }
+
         if (reply.length() == 0) {
             return {false, String("I can't reach my brain right now.")};
         }
