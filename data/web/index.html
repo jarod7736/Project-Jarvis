@@ -51,10 +51,13 @@
     </div>
     <div class="section">
       <h2><span>::</span> Available Networks
-        <button class="btn ghost mini" id="rescanBtn">Rescan</button>
+        <span style="display: flex; gap: 6px;">
+          <button class="btn ghost mini" id="manualBtn">+ SSID</button>
+          <button class="btn ghost mini" id="rescanBtn">Rescan</button>
+        </span>
       </h2>
       <div class="wifi-list" id="scanList">
-        <div class="empty">Tap Rescan to search for networks</div>
+        <div class="empty">Tap Rescan to search for networks, or "+ SSID" to enter one manually</div>
       </div>
     </div>
   </section>
@@ -79,7 +82,8 @@
 <div class="modal" id="wifiModal">
   <div class="modal-card">
     <h3 id="wifiModalTitle">Connect to Network</h3>
-    <p style="font-size: 12px; color: var(--ink-dim); margin-top: 0;" id="wifiModalSsid">SSID</p>
+    <input type="text" id="wifiSsidInput" placeholder="SSID" autocomplete="off"
+           autocapitalize="off" spellcheck="false" style="margin-bottom: 8px;">
     <input type="password" id="wifiPassword" placeholder="Password" autocomplete="off">
     <div style="display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end;">
       <button class="btn ghost" id="wifiCancel">Cancel</button>

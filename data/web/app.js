@@ -351,7 +351,7 @@ function renderSaved(n) {
   const item = el('div', { class: 'wifi-item' });
   const left = el('div');
   left.appendChild(el('div', { class: 'wifi-name', text: n.ssid }));
-  left.appendChild(el('div', { class: 'wifi-meta', text: 'priority ' + n.priority }));
+  left.appendChild(el('div', { class: 'wifi-meta', text: 'priority ' + (n.priority + 1) }));
   item.appendChild(left);
   item.appendChild(el('button', {
     class: 'btn ghost mini',
@@ -427,15 +427,38 @@ function renderScan(n) {
 
 let modalCtx = null;
 
+// Open the modal pre-populated from a scan result. SSID input is filled
+// and locked (the SSID is what the user tapped); password field is the
+// only editable thing.
 function openWifiModal(net) {
-  modalCtx = net;
+  modalCtx = { ...net, manual: false };
   $('#wifiModalTitle').textContent = net.secure ? 'Connect to Network' : 'Save Network';
-  $('#wifiModalSsid').textContent = net.ssid;
+  const ssidInput = $('#wifiSsidInput');
+  ssidInput.value = net.ssid;
+  ssidInput.readOnly = true;
   const pwd = $('#wifiPassword');
   pwd.value = '';
   pwd.style.display = net.secure ? '' : 'none';
   $('#wifiModal').classList.add('visible');
   if (net.secure) setTimeout(() => pwd.focus(), 50);
+}
+
+// Open the modal in manual mode — both SSID and password are editable.
+// Used when the target network isn't visible to scan (e.g., a phone
+// hotspot the user has to turn on AFTER finishing setup, or a hidden
+// SSID). We assume secured (password required) since open networks
+// almost never need this path.
+function openManualWifiModal() {
+  modalCtx = { ssid: '', secure: true, manual: true };
+  $('#wifiModalTitle').textContent = 'Add Network';
+  const ssidInput = $('#wifiSsidInput');
+  ssidInput.value = '';
+  ssidInput.readOnly = false;
+  const pwd = $('#wifiPassword');
+  pwd.value = '';
+  pwd.style.display = '';
+  $('#wifiModal').classList.add('visible');
+  setTimeout(() => ssidInput.focus(), 50);
 }
 
 function closeWifiModal() {
@@ -445,8 +468,15 @@ function closeWifiModal() {
 
 async function saveWifi() {
   if (!modalCtx) return;
+  // In manual mode the user can edit the SSID input; in scan mode it's
+  // read-only and we trust whatever the SSID was at modal-open time.
+  const ssid = modalCtx.manual ? $('#wifiSsidInput').value.trim() : modalCtx.ssid;
+  if (!ssid) {
+    toast('SSID required', 'error');
+    return;
+  }
   const body = {
-    ssid: modalCtx.ssid,
+    ssid,
     password: modalCtx.secure ? $('#wifiPassword').value : '',
   };
   try {
@@ -484,6 +514,7 @@ window.addEventListener('DOMContentLoaded', () => {
   initTabs();
 
   $('#rescanBtn').addEventListener('click', startScan);
+  $('#manualBtn').addEventListener('click', openManualWifiModal);
   $('#exitBtn').addEventListener('click', exitConfig);
   $('#saveBtn').addEventListener('click', saveConfig);
   $('#discardBtn').addEventListener('click', discardChanges);
