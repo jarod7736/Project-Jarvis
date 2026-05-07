@@ -55,6 +55,14 @@ public:
     // Call once on entry to Config mode; the rendering is static so
     // there's no per-frame redraw needed.
     static void drawConfigScreen();
+
+    // Update the backlight brightness. Range is clamped to [10, 255]
+    // to match the schema's validation (and to keep the screen from
+    // becoming completely unreadable if a stale or hostile NVS write
+    // sets it to zero). Safe to call from any task — under the hood
+    // it's a PWM duty cycle write, not a framebuffer flush, so it
+    // doesn't race with rendering done on the loop task.
+    static void setBrightness(int v);
 };
 
 }  // namespace jarvis::hal

@@ -125,7 +125,7 @@ void setup() {
                   (int)M5.Power.isCharging());
 
     jarvis::hal::Display::begin();
-    M5.Display.setBrightness(jarvis::NVSConfig::getBrightness());
+    jarvis::hal::Display::setBrightness(jarvis::NVSConfig::getBrightness());
 
     // LittleFS mount — hosts the captive-portal web UI under /web/.
     // Format-on-failure so a freshly-flashed device still works (an

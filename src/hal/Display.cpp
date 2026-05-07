@@ -391,6 +391,12 @@ void Display::setOtaActive(bool active) {
     updateFooter(g_wifi_tier, g_wifi_rssi);
 }
 
+void Display::setBrightness(int v) {
+    if (v < 10)  v = 10;   // never go fully dark — protects against stale NVS / hostile writes
+    if (v > 255) v = 255;
+    M5.Display.setBrightness(static_cast<uint8_t>(v));
+}
+
 void Display::drawConfigScreen() {
     // Captive-portal mode landing screen. Static — no per-frame redraws.
     // Color choice mirrors the "config mode" green accent in the web UI

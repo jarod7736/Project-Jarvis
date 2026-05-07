@@ -2,6 +2,7 @@
 
 #include <Preferences.h>
 
+#include "../hal/Display.h"
 #include "NVSConfig.h"
 
 namespace jarvis::app {
@@ -135,6 +136,26 @@ bool writeString(const char* key, const String& v) {
     bool ok = p.putString(key, v) > 0; p.end(); return ok;
 }
 
+// Live-apply hook for fields whose effect must be visible immediately on
+// patch (rather than waiting for the next read of the NVS value). Most
+// schema fields are read at use-site (route_timeout in HTTP calls,
+// log_to_sd in the logger, default_tier in the router) and naturally
+// reflect the new value on the next call — no hook needed. The ones
+// listed here own *driver state* that has to be pushed.
+//
+// Called from applyConfigJson() after a successful NVS write. The hook
+// runs on the AsyncWebServer task (whichever core that lives on); the
+// targeted writes (PWM duty for brightness, etc.) are atomic from any
+// context.
+void liveApply(const char* key) {
+    if (strcmp(key, "brightness") == 0) {
+        jarvis::hal::Display::setBrightness(jarvis::NVSConfig::getBrightness());
+    }
+    // Future: tts_volume → AudioPlayer::setVolume, mic_gain → LLMModule
+    // audio.work parameter. Left out for now — those involve more state
+    // than a single PWM register and want their own design pass.
+}
+
 }  // namespace
 
 void buildConfigJson(JsonDocument& doc) {
@@ -222,6 +243,7 @@ int applyConfigJson(const JsonDocument& patch) {
                 break;
             }
         }
+        liveApply(f.key);   // driver state push for fields that need it
         ++updated;
     }
     return updated;
