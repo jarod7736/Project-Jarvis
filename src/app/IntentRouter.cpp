@@ -5,8 +5,10 @@
 #include "../config.h"
 #include "../hal/LLMModule.h"
 #include "../net/LLMClient.h"
+#include "../net/OtaService.h"
 #include "../net/WiFiManager.h"
 #include "CommandHandler.h"
+#include "NVSConfig.h"
 
 namespace jarvis::app {
 
@@ -71,6 +73,15 @@ RouteResult handleOnDevice(const String& query) {
 // CommandHandler's keyword table for any HA intents the prefix-match below
 // doesn't catch.
 const char* classifyByKeyword(const String& lc) {
+    // Firmware update — must come before HA verbs since "update" is too
+    // generic to leak into the LLM fallback. Two-word phrases only, so
+    // routine HA chatter doesn't trigger.
+    if (lc.indexOf("update firmware") >= 0 ||
+        lc.indexOf("install update")  >= 0 ||
+        lc.indexOf("update yourself") >= 0) {
+        return "update_fw";
+    }
+
     // HA control verbs — clearly a command, even if the entity isn't in our
     // table.
     if (lc.indexOf("turn on")    >= 0 ||
@@ -138,6 +149,30 @@ RouteResult dispatchByIntent(const String& transcript, const String& intent,
     }
     if (intent == "on_device") {
         return handleOnDevice(query.length() ? query : transcript);
+    }
+    if (intent == "update_fw") {
+        String url = jarvis::NVSConfig::getFwUrl();
+        if (url.length() == 0) {
+            return {false, String(jarvis::config::kOtaSpeakNoUrl)};
+        }
+        if (tier == jarvis::net::ConnectivityTier::OFFLINE) {
+            return {false, String(jarvis::config::kErrNoNetwork)};
+        }
+        // Speak the start message asynchronously through LLMModule, then
+        // block on HTTPUpdate. On success the device reboots inside
+        // pullRemote(); on failure we fall through and the FSM speaks
+        // kOtaSpeakFailed via the returned RouteResult.
+        if (g_module) {
+            g_module->speak(jarvis::config::kOtaSpeakStart);
+            // Brief pause so TTS starts playing before HTTPUpdate hogs
+            // the WiFi stack. 2s is well under the 30s loop watchdog and
+            // the HTTPUpdate progress callback feeds the dog from there.
+            delay(2000);
+        }
+        // pullRemote returns only on failure — success path reboots
+        // inside HTTPUpdate. Discard the bool; failure is the only case.
+        (void)jarvis::net::OtaService::pullRemote(url);
+        return {false, String(jarvis::config::kOtaSpeakFailed)};
     }
     if (intent == "local_llm" || intent == "claude") {
         // Phase 6: dispatch to OpenClaw. Tier-gate first — both LAN and

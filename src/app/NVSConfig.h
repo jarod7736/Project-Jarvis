@@ -51,6 +51,16 @@ public:
     static String getTtsModel();
     static bool   setTtsModel(const String& model);
 
+    // OTA (Phase 7). `fw_url` is the firmware bin URL pulled by the
+    // "update firmware" voice intent (HTTPUpdate). `ota_pass` is the
+    // ArduinoOTA password — when unset, the LAN OTA service stays
+    // disabled (safe default; CLAUDE.md credentials-in-NVS rule).
+    // Both keys are ≤15 chars per the namespace constraint.
+    static String getFwUrl();
+    static bool   setFwUrl(const String& url);
+    static String getOtaPass();
+    static bool   setOtaPass(const String& pass);
+
     // Blocks reading USB Serial up to `timeoutMs` for a single JSON line.
     // The provisioning JSON is a bag of optional fields:
     //   {"ssid":"...", "pass":"...", "ha_token":"...", "ha_host":"..."}

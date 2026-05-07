@@ -43,6 +43,11 @@ public:
     // once. Animation strip lives at the bottom of the response region
     // — the response text above it stays visible.
     static void tickWaveform();
+
+    // Phase 7 OTA: paint a small "OTA" badge in the footer (left of
+    // the tier/RSSI string) while ArduinoOTA or HTTPUpdate is active.
+    // Cached so updateFooter() can repaint it after fillRect.
+    static void setOtaActive(bool active);
 };
 
 }  // namespace jarvis::hal

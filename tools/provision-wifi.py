@@ -1,42 +1,79 @@
 #!/usr/bin/env python3
-"""Provision WiFi credentials to a Project Jarvis CoreS3 over USB Serial.
+"""Provision Jarvis credentials to a CoreS3 over USB Serial.
 
-Run this after a fresh boot, when the device prints:
+Run after a fresh boot, when the device prints:
     [PROV] Listening on USB Serial for up to 180 seconds...
 
 Usage:
-    python3 tools/provision-wifi.py [device_path]
+    python3 tools/provision-wifi.py [--ota] [--no-wifi] [--device PATH]
 
-Default device path is /dev/ttyACM0. Prompts for SSID (visible) and password
-(silent via getpass), then writes a single JSON line over USB Serial. Uses
-json.dumps so any quote / backslash / unicode characters in the credentials
-are properly escaped — sidesteps every shell-quoting trap.
+Examples:
+    python3 tools/provision-wifi.py                    # WiFi only (default)
+    python3 tools/provision-wifi.py --ota              # WiFi + OTA password / firmware URL
+    python3 tools/provision-wifi.py --no-wifi --ota    # OTA only (WiFi already set)
+
+Filename kept as provision-wifi.py for back-compat with prior phases; the
+script now provisions any subset of the bag-of-keys JSON the device's
+provisionFromSerial() accepts. Uses json.dumps so any quote / backslash /
+unicode characters in the credentials are properly escaped — sidesteps every
+shell-quoting trap.
 """
+import argparse
 import getpass
 import json
 import sys
 
 
 def main() -> int:
-    device = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
+    p = argparse.ArgumentParser(
+        description="Provision Jarvis credentials over USB Serial.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--device", default="/dev/ttyACM0",
+                   help="Serial device path (default: /dev/ttyACM0)")
+    p.add_argument("--no-wifi", action="store_true",
+                   help="Skip SSID/password prompts")
+    p.add_argument("--ota", action="store_true",
+                   help="Also prompt for ota_pass + fw_url (Phase 7 OTA)")
+    args = p.parse_args()
 
-    ssid = input("SSID: ").strip()
-    if not ssid:
-        print("error: SSID cannot be empty", file=sys.stderr)
+    payload: dict[str, str] = {}
+
+    if not args.no_wifi:
+        ssid = input("SSID: ").strip()
+        if not ssid:
+            print("error: SSID cannot be empty (use --no-wifi to skip)", file=sys.stderr)
+            return 2
+        pw = getpass.getpass("WiFi password: ")
+        payload["ssid"] = ssid
+        payload["pass"] = pw
+
+    if args.ota:
+        # Empty inputs are skipped — partial OTA provisioning is fine.
+        ota_pass = getpass.getpass("OTA password (ota_pass, blank to skip): ")
+        if ota_pass:
+            payload["ota_pass"] = ota_pass
+        fw_url = input("Firmware URL (fw_url, blank to skip): ").strip()
+        if fw_url:
+            payload["fw_url"] = fw_url
+
+    if not payload:
+        print("error: nothing to send (use --ota and/or omit --no-wifi)", file=sys.stderr)
         return 2
 
-    pw = getpass.getpass("Password: ")
-
-    payload = json.dumps({"ssid": ssid, "pass": pw}) + "\n"
+    line = json.dumps(payload) + "\n"
 
     try:
-        with open(device, "wb", buffering=0) as f:
-            f.write(payload.encode("utf-8"))
+        with open(args.device, "wb", buffering=0) as f:
+            f.write(line.encode("utf-8"))
     except OSError as e:
-        print(f"error: could not write to {device}: {e}", file=sys.stderr)
+        print(f"error: could not write to {args.device}: {e}", file=sys.stderr)
         return 1
 
-    print(f"wrote {len(payload)} bytes to {device}")
+    # Echo back what we sent — secrets shown as <set> only.
+    secret_keys = {"pass", "ota_pass", "ha_token", "oc_key", "tts_api_key"}
+    redacted = {k: ("<set>" if k in secret_keys else v) for k, v in payload.items()}
+    print(f"wrote {len(line)} bytes to {args.device}: {json.dumps(redacted)}")
     return 0
 
 

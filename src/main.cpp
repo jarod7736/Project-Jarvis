@@ -22,6 +22,7 @@
 #include "hal/SdLogger.h"
 #include "net/HAClient.h"
 #include "net/LLMClient.h"
+#include "net/OtaService.h"
 #include "net/WiFiManager.h"
 
 namespace {
@@ -150,15 +151,19 @@ void setup() {
     // the tier-tagged version once getConnectivityTier() probes complete.
     jarvis::hal::Display::updateFooter("...", wifi_ok ? jarvis::net::WiFiManager::getRSSI() : 0);
 
-    // Phase 4/6: prompt for credentials if any of the optional services is
-    // unconfigured. Short window (30s). Bag-of-keys JSON: any combination
-    // of ssid, pass, ha_token, ha_host, oc_key, oc_host.
-    bool need_ha = (jarvis::NVSConfig::getHaToken().length() == 0);
-    bool need_oc = (jarvis::NVSConfig::getOcKey().length()   == 0);
-    if (wifi_ok && (need_ha || need_oc)) {
-        Serial.printf("[PROV] Missing creds: ha_token=%s oc_key=%s\n",
-                      need_ha ? "MISSING" : "set",
-                      need_oc ? "MISSING" : "set");
+    // Phase 4/6/7: prompt for credentials if any of the optional services
+    // is unconfigured. Short window (30s). Bag-of-keys JSON: any
+    // combination of ssid, pass, ha_token, ha_host, oc_key, oc_host,
+    // tts_*, ota_pass, fw_url. Once every gated key is set, the window
+    // stops opening at boot — provisioning is one-and-done.
+    bool need_ha  = (jarvis::NVSConfig::getHaToken().length() == 0);
+    bool need_oc  = (jarvis::NVSConfig::getOcKey().length()   == 0);
+    bool need_ota = (jarvis::NVSConfig::getOtaPass().length() == 0);
+    if (wifi_ok && (need_ha || need_oc || need_ota)) {
+        Serial.printf("[PROV] Missing creds: ha_token=%s oc_key=%s ota_pass=%s\n",
+                      need_ha  ? "MISSING" : "set",
+                      need_oc  ? "MISSING" : "set",
+                      need_ota ? "MISSING" : "set");
         Serial.println("[PROV] Send JSON now, or skip and those services error.");
         jarvis::NVSConfig::provisionFromSerial(30000);
     }
@@ -168,6 +173,14 @@ void setup() {
     Serial.printf("[OC] configured=%s host=%s\n",
                   jarvis::net::LLMClient::isConfigured() ? "yes" : "no",
                   jarvis::NVSConfig::getOcHost().c_str());
+
+    // Phase 7 OTA: ArduinoOTA listens for IDE/PlatformIO LAN pushes.
+    // Stays disabled if NVS `ota_pass` is empty (logs the reason).
+    // Per PLAN.md: this code MUST be in every future build or the OTA
+    // path is lost on the next flash.
+    if (wifi_ok) {
+        jarvis::net::OtaService::begin();
+    }
 
     // M5Bus UART: 115200 8N1. Pins resolved at runtime via Port C — they
     // differ across CoreS3 revisions, don't hardcode.
@@ -219,6 +232,7 @@ void loop() {
 
     g_module.update();
     jarvis::hal::AudioPlayer::tick();
+    jarvis::net::OtaService::tick();
     jarvis::app::tickStateMachine();
     refreshFooterIfIdle();
     refreshBattery();

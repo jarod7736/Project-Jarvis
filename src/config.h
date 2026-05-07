@@ -117,6 +117,26 @@ constexpr uint32_t kTtsHttpTimeoutMs = 15000;
 // 24 kbps; 120 KB gives ~40 s headroom for verbose Claude replies.
 constexpr size_t   kTtsMaxMp3Bytes   = 120 * 1024;
 
+// ── OTA (PLAN.md Phase 7) ─────────────────────────────────────────────────
+// LAN-side ArduinoOTA mDNS hostname — appears as "jarvis.local" in the
+// Arduino IDE / PlatformIO upload-port picker. Pinned here (not NVS) so
+// every device on the LAN is discoverable by the same name regardless of
+// flash state. Port 3232 is the espressif32 default; explicit so it shows
+// up in netstat if anything probes the bring-up.
+constexpr const char* kOtaHostname = "jarvis";
+constexpr uint16_t    kOtaPort     = 3232;
+
+// HTTPUpdate budget for remote OTA pulls. Generous — flashing 1 MB over a
+// slow LAN can take 30–60 s. Watchdog is fed via the progress callback in
+// OtaService, so the only real ceiling is the HTTP TCP timeout the lib
+// imposes on each chunk.
+constexpr uint32_t kOtaHttpTimeoutMs = 60000;
+
+// User-facing strings for the update_fw intent.
+constexpr const char* kOtaSpeakStart  = "Updating firmware now. Back in a minute.";
+constexpr const char* kOtaSpeakNoUrl  = "Firmware URL is not configured.";
+constexpr const char* kOtaSpeakFailed = "Firmware update failed.";
+
 // ── Hardware watchdog (PLAN.md Phase 7) ───────────────────────────────────
 // 30 s timeout. Generous on purpose: a normal voice cycle is 1–6 s end to
 // end, but cloud TTS+LLM can stretch to 10+ s on a slow link. The watchdog

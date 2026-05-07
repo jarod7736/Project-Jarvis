@@ -162,6 +162,38 @@ bool NVSConfig::setTtsModel(const String& model) {
     return ok;
 }
 
+String NVSConfig::getFwUrl() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("fw_url", "");
+    p.end();
+    return s;
+}
+
+bool NVSConfig::setFwUrl(const String& url) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("fw_url", url) > 0;
+    p.end();
+    return ok;
+}
+
+String NVSConfig::getOtaPass() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("ota_pass", "");
+    p.end();
+    return s;
+}
+
+bool NVSConfig::setOtaPass(const String& pass) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("ota_pass", pass) > 0;
+    p.end();
+    return ok;
+}
+
 // Apply a parsed JSON object to NVS. Each present key writes; absent keys
 // are skipped. Returns true if at least one key was applied. Logs every
 // applied key (without echoing secrets — token shows length only).
@@ -236,20 +268,22 @@ static bool applyProvisioningJson(const JsonDocument& doc) {
         }
     }
 
-    // Phase 7 cloud TTS keys. Same null-handling pattern as the others.
-    // The api_key is treated like the other secrets — length-only echo.
-    struct TtsField {
+    // Phase 7 cloud TTS keys + OTA keys. Same null-handling pattern as the
+    // others. Secrets (api_key, ota_pass) are echoed as length-only.
+    struct StringField {
         const char* json;
         bool        secret;
         bool      (*setter)(const String&);
     };
-    static const TtsField tts_fields[] = {
+    static const StringField string_fields[] = {
         {"tts_provider", false, &NVSConfig::setTtsProvider},
         {"tts_voice_id", false, &NVSConfig::setTtsVoiceId},
         {"tts_api_key",  true,  &NVSConfig::setTtsApiKey},
         {"tts_model",    false, &NVSConfig::setTtsModel},
+        {"fw_url",       false, &NVSConfig::setFwUrl},
+        {"ota_pass",     true,  &NVSConfig::setOtaPass},
     };
-    for (const auto& f : tts_fields) {
+    for (const auto& f : string_fields) {
         JsonVariantConst v = doc[f.json];
         if (!v.is<const char*>()) continue;
         String s = v.as<String>();

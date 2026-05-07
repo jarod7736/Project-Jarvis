@@ -102,6 +102,13 @@ namespace {
     String      g_wifi_tier        = "...";
     int         g_wifi_rssi        = 0;
 
+    // OTA badge state. Set true while ArduinoOTA or HTTPUpdate is
+    // active; the footer renderer prepends "OTA " to the tier+RSSI
+    // string. Cached so an updateFooter() called after a tier change
+    // repaints the badge correctly without OtaService having to chase
+    // every footer redraw.
+    bool      g_ota_active = false;
+
     // Waveform animation state. `g_wave_was_speaking` lets tickWaveform()
     // detect the SPEAKING→other transition and erase exactly once.
     bool      g_wave_was_speaking = false;
@@ -350,10 +357,17 @@ void Display::updateFooter(const String& tier, int rssi) {
 
     M5.Display.fillRect(0, FOOT_Y, SCR_W, FOOT_H, TFT_BLACK);
     M5.Display.setTextSize(1);
-    M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
 
-    // Left: tier + RSSI
-    M5.Display.setCursor(4, FOOT_Y + (FOOT_H - 8) / 2);
+    // Left: optional OTA badge (yellow, attention colour) then tier+RSSI.
+    int x = 4;
+    if (g_ota_active) {
+        M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+        M5.Display.setCursor(x, FOOT_Y + (FOOT_H - 8) / 2);
+        M5.Display.print("OTA ");
+        x += 4 * 6;  // "OTA " = 4 chars × 6 px @ textSize=1
+    }
+    M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    M5.Display.setCursor(x, FOOT_Y + (FOOT_H - 8) / 2);
     M5.Display.printf("%s  %ddBm", tier.c_str(), rssi);
 
     // Right: wall-clock (requires NTP; silently omitted until Phase 4+ wires it up)
@@ -365,6 +379,16 @@ void Display::updateFooter(const String& tier, int rssi) {
         M5.Display.setCursor(SCR_W - 48 - 4, FOOT_Y + (FOOT_H - 8) / 2);
         M5.Display.print(buf);
     }
+}
+
+void Display::setOtaActive(bool active) {
+    if (g_ota_active == active) return;
+    g_ota_active = active;
+    // Repaint the footer using the cached tier+rssi so the badge
+    // appears/disappears immediately. WiFi icon is wiped+redrawn as a
+    // side effect of updateFooter(), but tier/rssi don't change so the
+    // visible result is the same.
+    updateFooter(g_wifi_tier, g_wifi_rssi);
 }
 
 }  // namespace jarvis::hal
