@@ -42,15 +42,21 @@ constexpr int SCR_H = 240;
 constexpr int CHROME_Y     = 4;
 constexpr int CHROME_H     = 14;
 
-// Central reactor band
+// Central reactor band — rendered into an off-screen sprite so the
+// per-frame clear+redraw doesn't strobe on the panel.
 constexpr int REACTOR_Y    = 22;
-constexpr int REACTOR_H    = 188;
+constexpr int REACTOR_H    = 178;
 constexpr int REACTOR_CX   = SCR_W / 2;
 constexpr int REACTOR_CY   = REACTOR_Y + REACTOR_H / 2 - 4;
 
-// Bottom band (idle hint or transcript)
-constexpr int BOTTOM_Y     = 212;
-constexpr int BOTTOM_H     = 28;
+// Transcript line (single line, only when thinking/speaking; idle hint
+// when idle).
+constexpr int TRANSCRIPT_Y = 200;
+constexpr int TRANSCRIPT_H = 18;
+
+// Bottom footer — always shows tier/RSSI and (when NTP is up) wall-clock.
+constexpr int FOOTER_Y     = 220;
+constexpr int FOOTER_H     = 20;
 
 // Battery indicator (top-right)
 constexpr int BATT_BODY_W  = 18;
@@ -103,6 +109,14 @@ bool   g_ota_active       = false;
 // budget on-device.
 String  g_query_text;
 String  g_response_text;
+
+// Reactor sprite — flicker-free off-screen buffer. 320×178×2B = ~113 KB,
+// allocated lazily on first begin(). LovyanGFX prefers internal SRAM
+// when the size fits; falls back to PSRAM (or to direct draws) on
+// failure. Per-frame: we fill it, draw all the reactor primitives into
+// it, and push it to the panel in one DMA blit.
+M5Canvas g_reactor(&M5.Display);
+bool     g_reactor_ready = false;
 
 // ── PRNG (xorshift32) ───────────────────────────────────────────────────────
 inline uint32_t xs32() {
@@ -223,14 +237,30 @@ void synthMicLevel(float t) {
 //   5. Radial waveform spokes (LISTENING / SPEAKING only)
 //   6. Core circle (outline + filled center, color and size by state)
 void drawReactor(float t) {
-    // Clear the reactor band.
-    M5.Display.fillRect(0, REACTOR_Y, SCR_W, REACTOR_H, COL_BG);
+    // Pick the render target — sprite (preferred) or fall back to direct
+    // M5.Display draws if the sprite couldn't allocate. The sprite path
+    // is flicker-free; the fallback strobes mildly during the per-frame
+    // fillRect.
+    auto& gfx = g_reactor_ready ? static_cast<LovyanGFX&>(g_reactor)
+                                : static_cast<LovyanGFX&>(M5.Display);
 
+    if (g_reactor_ready) {
+        // Sprite-relative coordinate system: (0, 0) = top-left of the
+        // reactor band. Center the reactor primitives within the
+        // sprite's height.
+        gfx.fillScreen(COL_BG);
+    } else {
+        gfx.fillRect(0, REACTOR_Y, SCR_W, REACTOR_H, COL_BG);
+    }
+
+    // Coordinate origin: top-left of the reactor band (sprite) or of
+    // the panel (fallback). The center stays at (REACTOR_CX, mid-of-band).
     const int cx = REACTOR_CX;
-    const int cy = REACTOR_CY;
+    const int cy = g_reactor_ready ? (REACTOR_H / 2 - 4)
+                                   : REACTOR_CY;
 
     // 1. Outer frame circle (R≈86 — fits inside the band with a bit of margin)
-    M5.Display.drawCircle(cx, cy, 86, COL_DIM);
+    gfx.drawCircle(cx, cy, 86, COL_DIM);
 
     // 2. Rotating orbital arcs.
     // Outer arc — primary color, 270° span, slow rotation (full turn = 16s in idle,
@@ -244,13 +274,13 @@ void drawReactor(float t) {
         // [start..360) ∪ [0..end). LovyanGFX accepts either ordering.
     }
     // drawArc(x, y, outer_r, inner_r, start_deg, end_deg, color)
-    M5.Display.drawArc(cx, cy, 76, 75, outer_start, outer_end, COL_PRIMARY);
+    gfx.drawArc(cx, cy, 76, 75, outer_start, outer_end, COL_PRIMARY);
     // Knob at the start of the outer arc.
     {
         float a = outer_start * (M_PI / 180.0f);
         int   px = cx + (int)(cosf(a) * 76);
         int   py = cy + (int)(sinf(a) * 76);
-        M5.Display.fillCircle(px, py, 2, COL_PRIMARY);
+        gfx.fillCircle(px, py, 2, COL_PRIMARY);
     }
 
     // Inner arc — accent color, counter-rotating, 180° span.
@@ -258,7 +288,7 @@ void drawReactor(float t) {
     float spin_phase2    = fmodf(t / spin_period_s2, 1.0f);
     int   inner_start    = (360 - (int)(spin_phase2 * 360.0f)) % 360;
     int   inner_end      = (inner_start + 180) % 360;
-    M5.Display.drawArc(cx, cy, 60, 59, inner_start, inner_end, COL_ACCENT);
+    gfx.drawArc(cx, cy, 60, 59, inner_start, inner_end, COL_ACCENT);
 
     // 3. State-specific ring animation.
     if (g_state == DeviceState::LISTENING) {
@@ -273,7 +303,7 @@ void drawReactor(float t) {
             // Fade out as it reaches the core (last 30% of cycle)
             if (phase > 0.7f) continue;
             int ri = (int)r;
-            if (ri > 19) M5.Display.drawCircle(cx, cy, ri, COL_PRIMARY);
+            if (ri > 19) gfx.drawCircle(cx, cy, ri, COL_PRIMARY);
         }
     } else if (g_state == DeviceState::SPEAKING) {
         // Outbound ripples — three rings expanding outward. 2.0s cycle,
@@ -286,7 +316,7 @@ void drawReactor(float t) {
             // Fade by skipping the last 20% (couldn't draw partial alpha here)
             if (phase > 0.8f) continue;
             int ri = (int)r;
-            if (ri < 84) M5.Display.drawCircle(cx, cy, ri, COL_ACCENT);
+            if (ri < 84) gfx.drawCircle(cx, cy, ri, COL_ACCENT);
         }
     }
 
@@ -305,16 +335,16 @@ void drawReactor(float t) {
                 // length grows with amplitude. Primary color.
                 int r2 = 50;
                 int r1 = 50 - (int)(amp * 14.0f) - 3;
-                M5.Display.drawLine(cx + (int)(ca * r1), cy + (int)(sa * r1),
-                                    cx + (int)(ca * r2), cy + (int)(sa * r2),
-                                    COL_PRIMARY);
+                gfx.drawLine(cx + (int)(ca * r1), cy + (int)(sa * r1),
+                             cx + (int)(ca * r2), cy + (int)(sa * r2),
+                             COL_PRIMARY);
             } else {
                 // Outbound: spokes radiate from the core outward. Accent color.
                 int r1 = 22;
                 int r2 = 22 + (int)(amp * 18.0f) + 3;
-                M5.Display.drawLine(cx + (int)(ca * r1), cy + (int)(sa * r1),
-                                    cx + (int)(ca * r2), cy + (int)(sa * r2),
-                                    COL_ACCENT);
+                gfx.drawLine(cx + (int)(ca * r1), cy + (int)(sa * r1),
+                             cx + (int)(ca * r2), cy + (int)(sa * r2),
+                             COL_ACCENT);
             }
         }
     }
@@ -324,56 +354,105 @@ void drawReactor(float t) {
     bool list = (g_state == DeviceState::LISTENING);
     bool err  = (g_state == DeviceState::ERROR);
     uint16_t coreCol = err ? COL_DANGER : (resp ? COL_ACCENT : COL_PRIMARY);
-    M5.Display.drawCircle(cx, cy, 20, coreCol);
+    gfx.drawCircle(cx, cy, 20, coreCol);
     int innerR = resp ? 12 : (list ? 5 : 7);
-    M5.Display.fillCircle(cx, cy, innerR, coreCol);
+    gfx.fillCircle(cx, cy, innerR, coreCol);
+
+    // Push the sprite to the panel in one DMA blit. Direct-draw fallback
+    // already wrote to the panel and skips this step.
+    if (g_reactor_ready) {
+        g_reactor.pushSprite(0, REACTOR_Y);
+    }
 }
 
-// ── Bottom band: idle hint or transcript ────────────────────────────────────
-void drawBottom() {
-    M5.Display.fillRect(0, BOTTOM_Y, SCR_W, BOTTOM_H, COL_BG);
+// ── Transcript line ─────────────────────────────────────────────────────────
+// Single line above the footer. Idle hint when idle; query echo / response
+// preview / "computing..." when active. Truncated to one line — full
+// response goes through TTS, so the screen text is just an at-a-glance
+// confirmation.
+void drawTranscript() {
+    M5.Display.fillRect(0, TRANSCRIPT_Y, SCR_W, TRANSCRIPT_H, COL_BG);
     M5.Display.setTextSize(1);
 
     if (g_state == DeviceState::IDLE) {
         M5.Display.setTextColor(COL_DIM, COL_BG);
         const char* hint = "SAY \"HEY JARVIS\"";
-        // Center horizontally — 16 chars × 6 px = 96px wide
         int w = (int)strlen(hint) * 6;
-        M5.Display.setCursor((SCR_W - w) / 2, BOTTOM_Y + 12);
+        M5.Display.setCursor((SCR_W - w) / 2, TRANSCRIPT_Y + 5);
         M5.Display.print(hint);
         return;
     }
 
-    if (g_state == DeviceState::THINKING || g_state == DeviceState::SPEAKING) {
-        // Query line (dim chrome) on top, response (bright) below.
-        if (g_query_text.length() > 0) {
-            M5.Display.setTextColor(COL_DIM, COL_BG);
-            M5.Display.setCursor(8, BOTTOM_Y + 2);
-            M5.Display.print("> ");
-            // Truncate query to fit one line (~50 chars at textSize=1)
-            String q = g_query_text;
-            if (q.length() > 48) q = q.substring(0, 47) + "..";
-            M5.Display.print(q);
-        }
+    if (g_state == DeviceState::THINKING) {
+        M5.Display.setTextColor(COL_DIM, COL_BG);
+        M5.Display.setCursor(8, TRANSCRIPT_Y + 5);
+        M5.Display.print("> ");
+        String q = g_query_text.length() ? g_query_text : String("computing...");
+        if (q.length() > 48) q = q.substring(0, 47) + "..";
+        M5.Display.print(q);
+        return;
+    }
 
-        if (g_state == DeviceState::SPEAKING && g_response_text.length() > 0) {
-            M5.Display.setTextColor(COL_FG, COL_BG);
-            M5.Display.setCursor(8, BOTTOM_Y + 14);
-            String r = g_response_text;
-            if (r.length() > 48) r = r.substring(0, 47) + "..";
-            M5.Display.print(r);
-        } else if (g_state == DeviceState::THINKING) {
-            M5.Display.setTextColor(COL_DIM, COL_BG);
-            M5.Display.setCursor(8, BOTTOM_Y + 14);
-            M5.Display.print("computing...");
-        }
+    if (g_state == DeviceState::SPEAKING) {
+        M5.Display.setTextColor(COL_FG, COL_BG);
+        M5.Display.setCursor(8, TRANSCRIPT_Y + 5);
+        String r = g_response_text.length() ? g_response_text
+                                            : (g_query_text.length() ? g_query_text : String());
+        if (r.length() > 48) r = r.substring(0, 47) + "..";
+        M5.Display.print(r);
+        return;
+    }
+
+    if (g_state == DeviceState::LISTENING) {
+        M5.Display.setTextColor(COL_PRIMARY, COL_BG);
+        M5.Display.setCursor(8, TRANSCRIPT_Y + 5);
+        M5.Display.print("LISTENING...");
         return;
     }
 
     if (g_state == DeviceState::ERROR) {
         M5.Display.setTextColor(COL_DANGER, COL_BG);
-        M5.Display.setCursor(8, BOTTOM_Y + 8);
+        M5.Display.setCursor(8, TRANSCRIPT_Y + 5);
         M5.Display.print("ERROR");
+    }
+}
+
+// ── Footer: tier / RSSI / wall-clock ────────────────────────────────────────
+// Always visible. Mirrors the previous boxed-region UI's bottom row so
+// users have at-a-glance connectivity info even while the reactor is up.
+//
+//   [OTA] LAN  -55dBm                         14:32:07
+//
+// Wall clock requires NTP — silently omitted until the system clock is
+// set (Phase 4+ work).
+void drawFooter() {
+    M5.Display.fillRect(0, FOOTER_Y, SCR_W, FOOTER_H, COL_BG);
+    M5.Display.setTextSize(1);
+
+    int x = 6;
+    if (g_ota_active) {
+        M5.Display.setTextColor(COL_ACCENT, COL_BG);
+        M5.Display.setCursor(x, FOOTER_Y + 6);
+        M5.Display.print("OTA ");
+        x += 4 * 6;
+    }
+
+    M5.Display.setTextColor(COL_DIM, COL_BG);
+    M5.Display.setCursor(x, FOOTER_Y + 6);
+    char tier_buf[24];
+    snprintf(tier_buf, sizeof(tier_buf), "%s  %ddBm",
+             g_wifi_tier.length() ? g_wifi_tier.c_str() : "...",
+             g_wifi_rssi);
+    M5.Display.print(tier_buf);
+
+    // Right side: wall-clock if NTP is up.
+    struct tm t;
+    if (getLocalTime(&t, /*timeoutMs=*/0)) {
+        char clk[9];
+        strftime(clk, sizeof(clk), "%H:%M:%S", &t);
+        // 8 chars × 6 px = 48 px; right-align with 6 px margin
+        M5.Display.setCursor(SCR_W - 48 - 6, FOOTER_Y + 6);
+        M5.Display.print(clk);
     }
 }
 }  // namespace
@@ -382,9 +461,26 @@ void drawBottom() {
 void Display::begin() {
     M5.Display.setTextWrap(false);
     M5.Display.fillScreen(COL_BG);
+
+    // Allocate the reactor sprite. 16bpp keeps the size small (~113 KB
+    // for 320×178) so it can live in internal SRAM if available; LGFX
+    // falls back to PSRAM when not. On allocation failure we draw
+    // straight to the panel (with mild flicker — see drawReactor).
+    g_reactor.setColorDepth(16);
+    if (g_reactor.createSprite(SCR_W, REACTOR_H)) {
+        g_reactor_ready = true;
+        g_reactor.fillScreen(COL_BG);
+        Serial.printf("[Display] reactor sprite OK 16bpp %dx%d (%u bytes)\n",
+                      SCR_W, REACTOR_H, (unsigned)(SCR_W * REACTOR_H * 2));
+    } else {
+        Serial.println("[Display] reactor sprite alloc FAILED — falling back to direct draw");
+    }
+
     drawChrome();
-    // Reactor + bottom paint on the first tickWaveform() — set last_frame_ms
-    // to 0 so the first call paints immediately.
+    drawTranscript();
+    drawFooter();
+    // Reactor paints on the first tickWaveform() — set last_frame_ms to
+    // 0 so the first call paints immediately.
     g_last_frame_ms = 0;
 }
 
@@ -397,8 +493,8 @@ void Display::setStatus(DeviceState state) {
             g_query_text    = "";
             g_response_text = "";
         }
-        drawChrome();    // updates the state label immediately
-        drawBottom();    // refreshes idle hint / transcript visibility
+        drawChrome();      // updates the state label
+        drawTranscript();  // refreshes idle hint / transcript visibility
     }
 }
 
@@ -420,18 +516,19 @@ void Display::updateBattery(int level, bool charging) {
 
 void Display::showTranscript(const String& text) {
     g_query_text = text;
-    drawBottom();
+    drawTranscript();
 }
 
 void Display::showResponse(const String& text) {
     g_response_text = text;
-    drawBottom();
+    drawTranscript();
 }
 
 void Display::updateFooter(const String& tier, int rssi) {
     g_wifi_tier = tier;
     g_wifi_rssi = rssi;
     drawWifi();
+    drawFooter();
 }
 
 void Display::setOtaActive(bool active) {
