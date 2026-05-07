@@ -1,20 +1,40 @@
 // Jarvis Setup -- captive portal app
 //
-// Single-file SPA. All state stays in memory; nothing in localStorage
-// (the device wipes the AP after exit). Schema-driven panels: GET
-// /api/config returns {fields:[{key,label,category,type,value,...}]}
-// and we render each field into #panel-{category}.
+// Single-file SPA. Renders the schema-driven config UI defined by
+// data/web/index.html + style.css against the firmware's REST API
+// (see src/net/CaptivePortal.cpp). Class conventions match style.css
+// exactly:
+//   - Form field wrapper:  <div class="row">
+//                            <label>...</label>
+//                            <div class="control">...</div>
+//                          </div>
+//   - Slider value badge:  <span class="slider-value">…</span>
+//   - Bool toggle:         <div class="toggle [on]"> (JS toggles .on)
+//   - Stat tile:           <div class="stat">
+//                            <div class="label">…</div>
+//                            <div class="value">…</div>
+//                            <div class="sub">…</div>          (optional)
+//                          </div>
+//   - WiFi list item:      <div class="wifi-item">
+//                            <div>
+//                              <div class="wifi-name">…</div>
+//                              <div class="wifi-meta">…</div>
+//                            </div>
+//                            <button class="btn ghost mini">…</button>
+//                          </div>
+//   - Modal / Toast / Savebar overlays toggle the `.visible` class
+//     (NOT `.show` — that class is unstyled in this CSS).
 
 'use strict';
 
 const API = {
-  config:    '/api/config',
-  status:    '/api/status',
-  scan:      '/api/wifi/scan',
-  saved:     '/api/wifi/saved',
-  add:       '/api/wifi/add',
-  remove:    '/api/wifi/remove',
-  exit:      '/api/exit',
+  config: '/api/config',
+  status: '/api/status',
+  scan:   '/api/wifi/scan',
+  saved:  '/api/wifi/saved',
+  add:    '/api/wifi/add',
+  remove: '/api/wifi/remove',
+  exit:   '/api/exit',
 };
 
 // ============================================================================
@@ -22,7 +42,7 @@ const API = {
 // ============================================================================
 
 const state = {
-  schema: [],          // array of field defs from /api/config
+  schema: [],          // GET /api/config -> body.fields
   values: {},          // current saved values (mirrors server)
   pending: {},         // unsaved edits keyed by field key
   scanInflight: false,
@@ -57,13 +77,6 @@ function el(tag, attrs, children) {
   return e;
 }
 
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
-
 function fmtUptime(ms) {
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600);
@@ -80,17 +93,17 @@ function fmtBytes(n) {
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-// Toast
+// Toast — uses .visible (matches style.css).
 let toastTimer = null;
 function toast(msg, kind) {
   const t = $('#toast');
   t.textContent = msg;
-  t.className = 'toast show' + (kind ? ' ' + kind : '');
+  t.className = 'toast' + (kind === 'error' ? ' error' : '') + ' visible';
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.classList.remove('show'); }, 2400);
+  toastTimer = setTimeout(() => { t.classList.remove('visible'); }, 2400);
 }
 
-// Fetch helpers (small wrappers; ESPAsyncWebServer is happy with simple JSON)
+// Fetch wrappers
 async function getJson(url) {
   const r = await fetch(url, { cache: 'no-store' });
   if (!r.ok && r.status !== 202) throw new Error(`${url} -> ${r.status}`);
@@ -121,9 +134,8 @@ function initTabs() {
       const name = tab.dataset.tab;
       $$('.tab').forEach(t => t.classList.toggle('active', t === tab));
       $$('.panel').forEach(p => p.classList.toggle('active', p.dataset.panel === name));
-      // refresh status when activated
       if (name === 'status') refreshStatus();
-      if (name === 'wifi') { loadSaved(); }
+      if (name === 'wifi')   loadSaved();
     });
   });
 }
@@ -148,12 +160,10 @@ async function loadConfig() {
 }
 
 function renderConfigPanels() {
-  // Group by category
   const byCat = {};
   for (const f of state.schema) {
     (byCat[f.category] = byCat[f.category] || []).push(f);
   }
-  // Render into #panel-{cat} containers
   for (const cat in byCat) {
     const host = $('#panel-' + cat);
     if (!host) continue;
@@ -163,46 +173,50 @@ function renderConfigPanels() {
 }
 
 function renderField(f) {
-  const wrap = el('div', { class: 'field', 'data-key': f.key });
+  const row = el('div', { class: 'row', 'data-key': f.key });
+  row.appendChild(el('label', { text: f.label }));
+  const control = el('div', { class: 'control' });
+  row.appendChild(control);
 
-  const label = el('div', { class: 'field-label' });
-  label.appendChild(el('span', { text: f.label }));
-
-  const valueDisplay = el('span', { class: 'v' });
-  label.appendChild(valueDisplay);
-  wrap.appendChild(label);
-
-  let input;
   switch (f.type) {
     case 'bool': {
-      const toggle = el('label', { class: 'toggle' });
-      input = el('input', { type: 'checkbox' });
-      input.checked = !!f.value;
-      const slider = el('span', { class: 'slider' });
-      toggle.appendChild(input);
-      toggle.appendChild(slider);
-      label.replaceChild(toggle, valueDisplay);
-      input.addEventListener('change', () => onFieldChange(f, input.checked));
+      const toggle = el('div', {
+        class: 'toggle' + (f.value ? ' on' : ''),
+        role: 'switch',
+        'aria-checked': f.value ? 'true' : 'false',
+        tabindex: '0',
+      });
+      const setOn = (on) => {
+        toggle.classList.toggle('on', on);
+        toggle.setAttribute('aria-checked', on ? 'true' : 'false');
+        onFieldChange(f, on);
+      };
+      toggle.addEventListener('click', () => setOn(!toggle.classList.contains('on')));
+      toggle.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          setOn(!toggle.classList.contains('on'));
+        }
+      });
+      control.appendChild(toggle);
       break;
     }
     case 'int': {
-      input = el('input', {
+      const input = el('input', {
         type: 'range',
         min: f.min, max: f.max, step: 1, value: f.value,
       });
-      valueDisplay.textContent = f.value;
+      const value = el('span', { class: 'slider-value', text: String(f.value) });
       input.addEventListener('input', () => {
-        valueDisplay.textContent = input.value;
+        value.textContent = input.value;
         onFieldChange(f, parseInt(input.value, 10));
       });
-      wrap.appendChild(input);
-      const hint = el('div', { class: 'field-hint' });
-      hint.textContent = `range: ${f.min}–${f.max}` + (f.default != null ? ` · default: ${f.default}` : '');
-      wrap.appendChild(hint);
-      return wrap;
+      control.appendChild(input);
+      control.appendChild(value);
+      break;
     }
     case 'string': {
-      input = el('input', {
+      const input = el('input', {
         type: f.sensitive ? 'password' : 'text',
         value: f.value || '',
         placeholder: f.sensitive ? '(unchanged)' : '',
@@ -211,39 +225,29 @@ function renderField(f) {
         spellcheck: 'false',
       });
       input.addEventListener('input', () => onFieldChange(f, input.value));
-      label.removeChild(valueDisplay);
-      wrap.appendChild(input);
-      if (f.sensitive) {
-        const hint = el('div', { class: 'field-hint' });
-        hint.textContent = 'Leave as ******** to keep unchanged';
-        wrap.appendChild(hint);
-      }
-      return wrap;
+      control.appendChild(input);
+      break;
     }
     case 'enum': {
-      input = el('select');
+      const select = el('select');
       for (const opt of (f.options || [])) {
         const o = el('option', { value: opt.value, text: opt.label });
         if (opt.value === f.value) o.selected = true;
-        input.appendChild(o);
+        select.appendChild(o);
       }
-      input.addEventListener('change', () => onFieldChange(f, input.value));
-      label.removeChild(valueDisplay);
-      wrap.appendChild(input);
-      return wrap;
+      select.addEventListener('change', () => onFieldChange(f, select.value));
+      control.appendChild(select);
+      break;
     }
     default:
-      wrap.appendChild(el('div', { class: 'field-hint', text: 'unsupported type: ' + f.type }));
-      return wrap;
+      control.appendChild(el('span', { text: 'unsupported: ' + f.type }));
+      break;
   }
-
-  wrap.appendChild(input);
-  return wrap;
+  return row;
 }
 
 function onFieldChange(f, newValue) {
   const original = state.values[f.key];
-  // Sensitive strings: skip if user kept the masked placeholder
   if (f.sensitive && f.type === 'string' && newValue === '********') {
     delete state.pending[f.key];
   } else if (newValue === original) {
@@ -257,7 +261,7 @@ function onFieldChange(f, newValue) {
 function updateSaveBar() {
   const dirty = Object.keys(state.pending).length;
   const bar = $('#savebar');
-  bar.classList.toggle('show', dirty > 0);
+  bar.classList.toggle('visible', dirty > 0);
   $('#saveStatus').textContent = dirty
     ? `${dirty} unsaved change${dirty > 1 ? 's' : ''}`
     : '';
@@ -269,8 +273,7 @@ async function saveConfig() {
   btn.disabled = true;
   try {
     const r = await postJson(API.config, state.pending);
-    toast(`Saved ${r.updated || 0} field(s)`, 'success');
-    // Re-fetch to reflect any clamping/canonicalization
+    toast(`Saved ${r.updated || 0} field(s)`);
     await loadConfig();
   } catch (err) {
     toast('Save failed: ' + err.message, 'error');
@@ -297,21 +300,22 @@ async function refreshStatus() {
     const grid = $('#statusGrid');
     grid.innerHTML = '';
     const cells = [
-      { k: 'Mode', v: body.mode || '—', accent: true },
-      { k: 'AP SSID', v: body.ap_ssid || '—' },
-      { k: 'Clients', v: body.ap_clients ?? 0 },
-      { k: 'Battery', v: body.battery_pct != null ? body.battery_pct + '%' + (body.charging ? ' +' : '') : '—' },
-      { k: 'Uptime', v: body.uptime_ms != null ? fmtUptime(body.uptime_ms) : '—' },
-      { k: 'Free Heap', v: body.free_heap != null ? fmtBytes(body.free_heap) : '—' },
+      { k: 'Mode',       v: body.mode || '—' },
+      { k: 'AP SSID',    v: body.ap_ssid || '—' },
+      { k: 'Clients',    v: String(body.ap_clients ?? 0) },
+      { k: 'Battery',    v: body.battery_pct != null ? body.battery_pct + '%' : '—',
+        sub: body.charging ? 'charging' : null },
+      { k: 'Uptime',     v: body.uptime_ms != null ? fmtUptime(body.uptime_ms) : '—' },
+      { k: 'Free Heap',  v: body.free_heap != null ? fmtBytes(body.free_heap) : '—' },
     ];
     for (const c of cells) {
       const tile = el('div', { class: 'stat' });
-      tile.appendChild(el('div', { class: 'k', text: c.k }));
-      tile.appendChild(el('div', { class: 'v' + (c.accent ? ' accent' : ''), text: String(c.v) }));
+      tile.appendChild(el('div', { class: 'label', text: c.k }));
+      tile.appendChild(el('div', { class: 'value', text: c.v }));
+      if (c.sub) tile.appendChild(el('div', { class: 'sub', text: c.sub }));
       grid.appendChild(tile);
     }
   } catch (err) {
-    // silent; will retry on next tick
     console.warn('status refresh failed', err);
   }
 }
@@ -344,28 +348,23 @@ async function loadSaved() {
 }
 
 function renderSaved(n) {
-  const item = el('div', { class: 'wifi-item saved' });
-  const ssid = el('div', { class: 'ssid', text: n.ssid });
-  item.appendChild(ssid);
-  item.appendChild(el('div', { class: 'rssi', text: 'priority ' + n.priority }));
-  const actions = el('div', { class: 'actions' });
-  const remove = el('button', {
+  const item = el('div', { class: 'wifi-item' });
+  const left = el('div');
+  left.appendChild(el('div', { class: 'wifi-name', text: n.ssid }));
+  left.appendChild(el('div', { class: 'wifi-meta', text: 'priority ' + n.priority }));
+  item.appendChild(left);
+  item.appendChild(el('button', {
     class: 'btn ghost mini',
     text: 'Remove',
-    onclick: (e) => {
-      e.stopPropagation();
-      removeNetwork(n.ssid);
-    },
-  });
-  actions.appendChild(remove);
-  item.appendChild(actions);
+    onclick: (e) => { e.stopPropagation(); removeNetwork(n.ssid); },
+  }));
   return item;
 }
 
 async function removeNetwork(ssid) {
   try {
     await postJson(API.remove + '?ssid=' + encodeURIComponent(ssid));
-    toast('Removed ' + ssid, 'success');
+    toast('Removed ' + ssid);
     loadSaved();
   } catch (err) {
     toast('Remove failed', 'error');
@@ -378,7 +377,6 @@ async function startScan() {
   state.scanInflight = true;
   host.innerHTML = '<div class="empty">Scanning…</div>';
   try {
-    // First call kicks off async scan; poll until 200
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
       const { status, body } = await getJson(API.scan);
@@ -403,9 +401,7 @@ function renderScanResults(host, list) {
     host.appendChild(el('div', { class: 'empty', text: 'No networks found' }));
     return;
   }
-  // Sort by signal
   list.sort((a, b) => (b.rssi || -100) - (a.rssi || -100));
-  // Dedupe by SSID, keep strongest
   const seen = new Set();
   for (const n of list) {
     if (!n.ssid || seen.has(n.ssid)) continue;
@@ -415,14 +411,17 @@ function renderScanResults(host, list) {
 }
 
 function renderScan(n) {
-  const item = el('div', { class: 'wifi-item', onclick: () => openWifiModal(n) });
-  const ssid = el('div', { class: 'ssid' });
-  if (n.secure) {
-    ssid.appendChild(el('span', { class: 'lock', text: '🔒' }));
-  }
-  ssid.appendChild(document.createTextNode(n.ssid));
-  item.appendChild(ssid);
-  item.appendChild(el('div', { class: 'rssi', text: (n.rssi || 0) + ' dBm' }));
+  const item = el('div', {
+    class: 'wifi-item',
+    onclick: () => openWifiModal(n),
+  });
+  const left = el('div');
+  left.appendChild(el('div', { class: 'wifi-name', text: n.ssid }));
+  const meta = el('div', { class: 'wifi-meta' });
+  meta.appendChild(el('span', { text: (n.rssi || 0) + ' dBm' }));
+  if (n.secure) meta.appendChild(el('span', { text: 'secured' }));
+  left.appendChild(meta);
+  item.appendChild(left);
   return item;
 }
 
@@ -435,12 +434,12 @@ function openWifiModal(net) {
   const pwd = $('#wifiPassword');
   pwd.value = '';
   pwd.style.display = net.secure ? '' : 'none';
-  $('#wifiModal').classList.add('show');
+  $('#wifiModal').classList.add('visible');
   if (net.secure) setTimeout(() => pwd.focus(), 50);
 }
 
 function closeWifiModal() {
-  $('#wifiModal').classList.remove('show');
+  $('#wifiModal').classList.remove('visible');
   modalCtx = null;
 }
 
@@ -452,7 +451,7 @@ async function saveWifi() {
   };
   try {
     await postJson(API.add, body);
-    toast('Saved ' + body.ssid, 'success');
+    toast('Saved ' + body.ssid);
     closeWifiModal();
     loadSaved();
   } catch (err) {
@@ -468,10 +467,9 @@ async function exitConfig() {
   if (!confirm('Exit Config Mode? The device will return to normal voice operation and this WiFi network will disappear.')) return;
   try {
     await postJson(API.exit);
-    toast('Exiting…', 'success');
-    // The AP disappears in a few hundred ms; show a friendly message
+    toast('Exiting…');
     setTimeout(() => {
-      document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#8b97a8;font-family:ui-monospace,monospace;">Device returned to normal mode.<br>You can disconnect from Jarvis-Setup.</div>';
+      document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#7a8a8a;font-family:ui-monospace,monospace;">Device returned to normal mode.<br>You can disconnect from Jarvis-Setup.</div>';
     }, 1500);
   } catch (err) {
     toast('Exit failed', 'error');
@@ -490,7 +488,6 @@ window.addEventListener('DOMContentLoaded', () => {
   $('#saveBtn').addEventListener('click', saveConfig);
   $('#discardBtn').addEventListener('click', discardChanges);
 
-  // Modal
   $('#wifiCancel').addEventListener('click', closeWifiModal);
   $('#wifiSave').addEventListener('click', saveWifi);
   $('#wifiModal').addEventListener('click', (e) => {
