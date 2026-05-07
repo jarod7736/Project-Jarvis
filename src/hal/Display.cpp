@@ -67,35 +67,41 @@ struct Behavior {
 };
 
 // Indexed by DeviceState (IDLE=0, LISTENING=1, THINKING=2, SPEAKING=3, ERROR=4)
+//
+// Sizes are deliberately larger than the JS prototype's; on a 320×240
+// integer-pixel raster a "size 1.2" particle's 0.6-pixel core radius
+// rounds to 1 px for everyone, killing the size variation. ~2-6 px
+// puts each layer of the glow at a distinct integer radius and keeps
+// the per-particle size_seed visibly different.
 constexpr Behavior kBehaviors[] = {
     // IDLE — gentle dispersion, particles repel each other softly
     { 42, 0.18f, 0.94f, 0.0008f, TargetType::Disperse,
       38.0f, 0.012f,
       0,0, 0,0, 0,0,0, 0,
-      1.2f, 2.6f, 90, 30, 4000, 0.0f },
+      2.0f, 4.5f, 90, 30, 4000, 0.0f },
     // LISTENING (capturing) — horizontal oscillation pumped by mic level
     { 56, 0.6f, 0.88f, 0.012f, TargetType::Horizontal,
       0,0,
       36.0f, 0.012f,
       0,0, 0,0,0, 0,
-      1.6f, 3.2f, 140, 40, 600, 0.0f },
+      2.5f, 5.5f, 140, 40, 600, 0.0f },
     // THINKING — orbital motion around screen center
     { 42, 0.1f, 0.92f, 0.018f, TargetType::Orbit,
       0,0, 0,0,
       38.0f, 0.018f,
       0,0,0, 0,
-      1.4f, 2.8f, 130, 70, 1100, 0.0f },
+      2.2f, 5.0f, 130, 70, 1100, 0.0f },
     // SPEAKING — sine wave ripple across the field
     { 60, 0.4f, 0.86f, 0.008f, TargetType::Wave,
       0,0, 0,0, 0,0,
       22.0f, 0.025f, 0.06f,
       0,
-      1.8f, 3.4f, 160, 50, 350, 0.0f },
+      3.0f, 6.0f, 160, 50, 350, 0.0f },
     // ERROR — sparse, falling, color desaturated
     { 16, 0.04f, 0.98f, 0.0006f, TargetType::Gravity,
       0,0, 0,0, 0,0, 0,0,0,
       0.02f,
-      1.0f, 1.8f, 50, 10, 5000, 0.7f },
+      1.5f, 3.0f, 50, 10, 5000, 0.7f },
 };
 
 // ── Tier table ──────────────────────────────────────────────────────────────
@@ -178,16 +184,17 @@ ColorRGB tierColor(int idx, float desat) {
         (uint8_t)(t.b + (lum - t.b) * desat + 0.5f),
     };
 }
-// Approximate alpha blend — multiply RGB by alpha (0..255). Avoids a
-// real per-pixel alpha pass; the layered ellipses give the "glow"
-// effect via three progressively darker draws of the same color.
-inline uint16_t scaleColor(const ColorRGB& c, int alpha) {
+// argb8888 with real alpha — the canvas is 32bpp (RGBA8888) so
+// LovyanGFX does proper per-pixel alpha blending against whatever's
+// already in the sprite. M5Canvas::pushSprite() down-converts to
+// RGB565 on the way to the panel.
+inline uint32_t argb(const ColorRGB& c, int alpha) {
     if (alpha < 0)   alpha = 0;
     if (alpha > 255) alpha = 255;
-    uint8_t r = (uint8_t)((c.r * alpha) >> 8);
-    uint8_t g = (uint8_t)((c.g * alpha) >> 8);
-    uint8_t b = (uint8_t)((c.b * alpha) >> 8);
-    return rgb565(r, g, b);
+    return ((uint32_t)alpha << 24) |
+           ((uint32_t)c.r   << 16) |
+           ((uint32_t)c.g   <<  8) |
+           (uint32_t)c.b;
 }
 
 // ── Particle sim ────────────────────────────────────────────────────────────
@@ -300,19 +307,28 @@ void drawParticles(const Behavior& b, const ColorRGB& base, float t) {
 
         int cx = (int)p.x;
         int cy = (int)p.y + STATUS_H;
-        // Three-layer "glow": large dim halo, medium mid, bright core.
-        // The layered approach approximates alpha blending without a
-        // per-pixel composite pass.
-        int outer_r = (int)(sz * 2.0f + 0.5f);
-        int mid_r   = (int)(sz * 1.1f + 0.5f);
-        int core_r  = (int)(sz * 0.5f + 0.5f);
-        if (outer_r < 2) outer_r = 2;
-        if (mid_r   < 1) mid_r   = 1;
-        if (core_r  < 1) core_r  = 1;
+        // Five-layer "glow": each ring is a decreasing-radius
+        // fillCircle with a real alpha value (canvas is 32bpp). The
+        // outer rings are very dim and largely additive; the inner
+        // rings stack alpha on top to produce a smooth-ish radial
+        // falloff. With 32bpp blending this reads as a soft cloud
+        // rather than the concentric solid rings the 16bpp code drew.
+        int r5 = (int)(sz * 4.0f + 0.5f);
+        int r4 = (int)(sz * 2.8f + 0.5f);
+        int r3 = (int)(sz * 1.9f + 0.5f);
+        int r2 = (int)(sz * 1.2f + 0.5f);
+        int r1 = (int)(sz * 0.6f + 0.5f);
+        if (r5 < 2) r5 = 2;
+        if (r4 < 2) r4 = 2;
+        if (r3 < 1) r3 = 1;
+        if (r2 < 1) r2 = 1;
+        if (r1 < 1) r1 = 1;
 
-        g_canvas.fillCircle(cx, cy, outer_r, scaleColor(base, (int)(alpha * 0.18f)));
-        g_canvas.fillCircle(cx, cy, mid_r,   scaleColor(base, (int)(alpha * 0.40f)));
-        g_canvas.fillCircle(cx, cy, core_r,  scaleColor(base, (int)alpha));
+        g_canvas.fillCircle(cx, cy, r5, argb(base, (int)(alpha * 0.06f)));
+        g_canvas.fillCircle(cx, cy, r4, argb(base, (int)(alpha * 0.13f)));
+        g_canvas.fillCircle(cx, cy, r3, argb(base, (int)(alpha * 0.27f)));
+        g_canvas.fillCircle(cx, cy, r2, argb(base, (int)(alpha * 0.55f)));
+        g_canvas.fillCircle(cx, cy, r1, argb(base, (int)alpha));
     }
 }
 
@@ -420,17 +436,26 @@ void Display::begin() {
     M5.Display.setTextWrap(false);
     M5.Display.fillScreen(TFT_BLACK);
 
-    // Allocate the full-screen sprite. Prefers PSRAM (CoreS3 has 8 MB);
-    // falls back to internal RAM if PSRAM init failed (which we
-    // observed once during early boot — see the
-    // "PSRAM ID read error" warning in main.cpp's boot log).
-    g_canvas.setColorDepth(16);
+    // Allocate the full-screen sprite at 32bpp (RGBA8888) — the
+    // particle "glow" effect needs real per-pixel alpha blending,
+    // which 16bpp RGB565 doesn't provide. 320×240×4 = 307 KB, lives
+    // in PSRAM (CoreS3 has 8 MB; LGFX prefers PSRAM when available).
+    // pushSprite() down-converts to RGB565 on the way to the panel.
+    g_canvas.setColorDepth(32);
     if (g_canvas.createSprite(SCR_W, SCR_H)) {
         g_canvas_ready = true;
         g_canvas.fillScreen(TFT_BLACK);
+        Serial.printf("[Display] sprite OK 32bpp %dx%d (%u bytes)\n",
+                      SCR_W, SCR_H, (unsigned)(SCR_W * SCR_H * 4));
     } else {
-        g_canvas_ready = false;
-        Serial.println("[Display] sprite alloc FAILED — falling back to direct draw");
+        // PSRAM-allocation failure path. Retry at 16bpp so we at least
+        // get something on screen, even though the glow won't blend
+        // properly without a real alpha channel.
+        Serial.println("[Display] 32bpp sprite alloc FAILED — retrying at 16bpp");
+        g_canvas.setColorDepth(16);
+        g_canvas_ready = g_canvas.createSprite(SCR_W, SCR_H);
+        if (g_canvas_ready) g_canvas.fillScreen(TFT_BLACK);
+        else Serial.println("[Display] 16bpp sprite ALSO failed — direct draw fallback");
     }
 
     rebuildParticles(kBehaviors[(int)DeviceState::IDLE].count);
