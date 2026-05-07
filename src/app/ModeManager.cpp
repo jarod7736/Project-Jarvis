@@ -43,10 +43,12 @@ void redrawAfterModeChange() {
     if (g_mode == ModeManager::Mode::Config) {
         jarvis::hal::Display::drawConfigScreen();
     } else {
-        // Returning to Normal: clear screen back to the FSM's status
-        // chrome. setStatus() repaints the status bar; the FSM will
-        // refill the rest on its next tick.
-        jarvis::hal::Display::setStatus(jarvis::hal::DeviceState::IDLE);
+        // Returning to Normal: full repaint. setStatus(IDLE) alone
+        // isn't enough — it early-returns when the FSM state didn't
+        // change while paused, and even when it does fire it only
+        // touches chrome + transcript (the reactor band and footer
+        // would keep whatever the Config screen left on them).
+        jarvis::hal::Display::drawHomeScreen();
     }
 }
 }  // namespace
