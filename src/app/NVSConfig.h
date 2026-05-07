@@ -83,6 +83,55 @@ public:
     // Phase 3 entry point — same wire format, but rejects input that's
     // missing `ssid`. Kept for the WiFi-cred-required boot path.
     static bool provisionWiFiFromSerial(uint32_t timeoutMs = 180000);
+
+    // ── Tunables surfaced through the captive-portal UI ────────────────
+    // These overlap with config.h compile-time constants but live in NVS
+    // so an end user can adjust them at runtime via the web UI without a
+    // re-flash. Code that consults them should fall back to the config.h
+    // default when the NVS value is absent (use the *Default helpers).
+    //
+    // All keys ≤15 chars per the namespace constraint.
+
+    // TTS playback volume, 0–100. Mapped to M5.Speaker setVolume() at
+    // begin() time and on change. Default 70.
+    static int  getTtsVolume();
+    static bool setTtsVolume(int pct);
+
+    // Wake-word sensitivity, 1 (least sensitive) – 10 (most). Translates
+    // to KWS module threshold; tuned values are device-specific. Default 5.
+    static int  getWakeSens();
+    static bool setWakeSens(int v);
+
+    // Mic input gain, 0–100. Default 50. Mapped to M5Module-LLM
+    // audio.work parameters at boot.
+    static int  getMicGain();
+    static bool setMicGain(int pct);
+
+    // Default routing tier — one of "auto", "local", "cloud", "qwen".
+    // "auto" falls back to the connectivity-tier-driven router; the
+    // others force a specific backend. Default "auto".
+    static String getDefaultTier();
+    static bool   setDefaultTier(const String& tier);
+
+    // HTTP timeout (ms) for the routing layer's outbound calls, 500–10000.
+    // Default 3000.
+    static int  getRouteTimeout();
+    static bool setRouteTimeout(int ms);
+
+    // Whether to mirror voice-loop transcripts to the SD card via
+    // hal/SdLogger. Default true.
+    static bool getLogToSd();
+    static bool setLogToSd(bool on);
+
+    // Display backlight brightness, 10–255. Default 180. Applied to
+    // M5.Display.setBrightness() at boot and on change.
+    static int  getBrightness();
+    static bool setBrightness(int v);
+
+    // Auto-sleep timeout (seconds) — 0 disables. Default 60. Used by
+    // ModeManager to dim/blank the display after inactivity.
+    static int  getSleepSecs();
+    static bool setSleepSecs(int s);
 };
 
 }  // namespace jarvis

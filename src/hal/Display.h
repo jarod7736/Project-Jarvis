@@ -48,6 +48,13 @@ public:
     // the tier/RSSI string) while ArduinoOTA or HTTPUpdate is active.
     // Cached so updateFooter() can repaint it after fillRect.
     static void setOtaActive(bool active);
+
+    // Captive-portal Config mode screen. Shows the AP SSID
+    // (Jarvis-Setup), the URL to open (http://192.168.4.1), and a hint
+    // that holding the screen for 2 seconds returns to Normal mode.
+    // Call once on entry to Config mode; the rendering is static so
+    // there's no per-frame redraw needed.
+    static void drawConfigScreen();
 };
 
 }  // namespace jarvis::hal

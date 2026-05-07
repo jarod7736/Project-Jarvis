@@ -391,4 +391,40 @@ void Display::setOtaActive(bool active) {
     updateFooter(g_wifi_tier, g_wifi_rssi);
 }
 
+void Display::drawConfigScreen() {
+    // Captive-portal mode landing screen. Static — no per-frame redraws.
+    // Color choice mirrors the "config mode" green accent in the web UI
+    // (data/web/style.css var(--accent) #00e676). 0x07E0 is RGB565 green.
+    M5.Display.fillScreen(0x0841);  // very dark blue background
+    M5.Display.setTextDatum(top_left);
+
+    // Title
+    M5.Display.setTextColor(0x07E0);  // green
+    M5.Display.setTextSize(2);
+    M5.Display.setCursor(60, 20);
+    M5.Display.print("CONFIG MODE");
+
+    M5.Display.setTextColor(TFT_WHITE);
+    M5.Display.setTextSize(1);
+    M5.Display.setCursor(20, 70);
+    M5.Display.print("Connect phone to WiFi:");
+
+    M5.Display.setTextSize(2);
+    M5.Display.setCursor(40, 100);
+    M5.Display.setTextColor(0x07E0);
+    M5.Display.print("Jarvis-Setup");
+
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(TFT_WHITE);
+    M5.Display.setCursor(20, 150);
+    M5.Display.print("Then open in browser:");
+    M5.Display.setCursor(40, 170);
+    M5.Display.setTextColor(0x07E0);
+    M5.Display.print("http://192.168.4.1");
+
+    M5.Display.setTextColor(TFT_DARKGREY);
+    M5.Display.setCursor(40, 220);
+    M5.Display.print("Hold screen 2s to exit");
+}
+
 }  // namespace jarvis::hal
