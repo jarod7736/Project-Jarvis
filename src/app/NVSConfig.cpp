@@ -326,16 +326,32 @@ static void dumpRawLine(const String& line) {
 // Read one JSON line from Serial. On success, fills `outDoc` and returns
 // true. On parse error, logs and reverts to listening. On timeout, returns
 // false. Shared body for the two provisioning entry points.
+//
+// On Linux, /dev/ttyACM0's default line discipline echoes the device's
+// boot output back into its serial input — by the time this runs, the
+// RX buffer can hold fragments of the boot log. Skip any line that
+// doesn't start with '{' so echo fragments get dropped silently while
+// real JSON (which always starts with '{') is parsed normally. Don't
+// drain at entry: the user may have already sent their JSON before the
+// prov window opened, and we'd swallow it.
 static bool readProvisioningJson(JsonDocument& outDoc, uint32_t timeoutMs) {
     String line;
     line.reserve(256);
-    uint32_t t0 = millis();
 
+    uint32_t t0 = millis();
     while (millis() - t0 < timeoutMs) {
         while (Serial.available()) {
             char c = (char)Serial.read();
             if (c == '\n' || c == '\r') {
                 if (line.length() == 0) continue;
+
+                if (line.charAt(0) != '{') {
+                    // Echoed boot-log fragment or stray typing. Drop
+                    // silently so the console doesn't fill with parse
+                    // errors during a 30 s prov window.
+                    line = "";
+                    continue;
+                }
 
                 DeserializationError err = deserializeJson(outDoc, line);
                 if (err) {
