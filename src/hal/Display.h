@@ -36,13 +36,14 @@ public:
     // "unknown" — the icon is drawn empty and the text shows "--%".
     static void updateBattery(int level, bool charging);
 
-    // Drive the SPEAKING-state waveform animation. Cheap when not
-    // speaking (single comparison); ~10 Hz redraw when active. Call
-    // every loop() iteration. Internally tracks the last setStatus()
-    // value so transitions out of SPEAKING erase the strip exactly
-    // once. Animation strip lives at the bottom of the response region
-    // — the response text above it stays visible.
-    static void tickWaveform();
+    // Drive the per-frame particle-field render. Throttled internally
+    // to ~30 FPS; cheap when not due (single millis() compare). Call
+    // every loop() iteration. The particle simulation reads the most
+    // recent state set by setStatus() and the tier set by setTier().
+    // (Historical name: was tickWaveform() in the boxed-region UI.)
+    static void tickParticles();
+    // Back-compat alias — main.cpp called this name in earlier builds.
+    static inline void tickWaveform() { tickParticles(); }
 
     // Phase 7 OTA: paint a small "OTA" badge in the footer (left of
     // the tier/RSSI string) while ArduinoOTA or HTTPUpdate is active.
@@ -63,6 +64,16 @@ public:
     // it's a PWM duty cycle write, not a framebuffer flush, so it
     // doesn't race with rendering done on the loop task.
     static void setBrightness(int v);
+
+    // Set the particle-field tier color. The four tiers correspond to
+    // the routing layer's intelligence backends:
+    //   QWEN  — mint  (#5fe3a1) — local Qwen on the LLM Module
+    //   LOCAL — blue  (#7fc8ff) — OpenClaw local model (gemma)
+    //   CLOUD — purple(#c89cff) — Claude via OpenClaw
+    //   HA    — orange(#ffb454) — Home Assistant intent
+    // Cached so re-renders pick it up. Idempotent.
+    enum class Tier : uint8_t { QWEN = 0, LOCAL = 1, CLOUD = 2, HA = 3 };
+    static void setTier(Tier t);
 };
 
 }  // namespace jarvis::hal

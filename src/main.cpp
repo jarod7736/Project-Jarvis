@@ -127,6 +127,18 @@ void setup() {
     jarvis::hal::Display::begin();
     jarvis::hal::Display::setBrightness(jarvis::NVSConfig::getBrightness());
 
+    // Initial particle-field tier color — derived from the
+    // captive-portal `default_tier` setting. "auto" maps to QWEN
+    // (the on-Module router is what every query touches first); the
+    // other strings map directly to a Tier enum slot.
+    {
+        const String dt = jarvis::NVSConfig::getDefaultTier();
+        using T = jarvis::hal::Display::Tier;
+        if      (dt == "local") jarvis::hal::Display::setTier(T::LOCAL);
+        else if (dt == "cloud") jarvis::hal::Display::setTier(T::CLOUD);
+        else                     jarvis::hal::Display::setTier(T::QWEN);   // auto / qwen
+    }
+
     // LittleFS mount — hosts the captive-portal web UI under /web/.
     // Format-on-failure so a freshly-flashed device still works (an
     // empty FS just means /api/* responds but the UI can't load until
