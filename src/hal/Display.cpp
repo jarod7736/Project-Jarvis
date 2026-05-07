@@ -1,564 +1,411 @@
-// Display.cpp -- Jarvis on-device UI for CoreS3.
-//
-// Faithful port of the p5.js particle-field prototype
-// (docs/jarvis_particle_prototype.html). The 320×240 screen is owned
-// by a particle simulation that encodes:
-//   - FSM state via motion pattern  (idle / capturing / thinking /
-//     speaking / error)
-//   - Routing tier via particle color (qwen / local / cloud / ha)
-//
-// Implementation notes:
-//   - All rendering goes through an M5Canvas sprite allocated in
-//     PSRAM (320·240·2B = 153 KB). pushSprite() is a single DMA blit,
-//     so we get flicker-free 30 FPS without burning bus time on
-//     dozens of fillRect/drawLine calls per frame.
-//   - The public methods setStatus() / updateBattery() / showTranscript()
-//     etc. only update internal state; they don't paint directly.
-//     tickParticles() reads that state and produces the next frame.
-//   - drawConfigScreen() bypasses the particle system entirely (Config
-//     mode is a static screen managed by ModeManager — no animation
-//     needed and we want it readable while voice is paused).
-//
-// Performance notes:
-//   - 70 particles × 30 FPS × ~20 float ops per particle update
-//     ≈ 42K float ops/sec. ESP32-S3 FPU eats this for breakfast.
-//   - Per-frame collision pass for the IDLE 'disperse' behavior is
-//     O(n²) over particles. With n ≤ 64 (kMaxParticles) that's <2K
-//     pair tests per frame, also trivial.
-//   - sinf() in newlib is software but fast on ESP32-S3 (~1 µs).
-
 #include "Display.h"
 
 #include <M5Unified.h>
-#include <math.h>
 #include <time.h>
 
 namespace jarvis::hal {
 
-// ── Layout ──────────────────────────────────────────────────────────────────
+// ── Layout (px) ─────────────────────────────────────────────────────────────
+// CoreS3 display: 320 × 240.  All Y values are top-of-region.
 namespace {
-constexpr int SCR_W   = 320;
-constexpr int SCR_H   = 240;
-constexpr int STATUS_H = 24;        // top status bar
-constexpr int kMaxParticles = 64;   // ≤ 70 in the prototype, dialed down
-                                    // for headroom on ESP32-S3
-constexpr uint32_t kFrameMs = 33;   // ~30 FPS
+    constexpr int SCR_W   = 320;
 
-// ── Particle behavior table ─────────────────────────────────────────────────
-enum class TargetType : uint8_t { Disperse, Horizontal, Orbit, Wave, Gravity };
+    constexpr int STATUS_Y = 0,   STATUS_H = 30;
+    // 5px implicit gap (black) between status bar and transcript
+    constexpr int TRANS_Y  = 35,  TRANS_H  = 60;
+    // 5px implicit gap then 1px divider
+    constexpr int DIV1_Y   = 100;
+    constexpr int RESP_Y   = 101, RESP_H   = 109;
+    constexpr int DIV2_Y   = 210;
+    constexpr int FOOT_Y   = 211, FOOT_H   = 29;
 
-struct Behavior {
-    int   count;
-    float drift;
-    float damping;
-    float target_force;
-    TargetType target_type;
-    // Type-specific extras (zero if unused for that target)
-    float repel_radius, repel_strength;        // Disperse
-    float oscillate_amp, oscillate_freq;       // Horizontal
-    float orbit_radius, orbit_speed;           // Orbit
-    float wave_amp, wave_freq, wave_speed;     // Wave
-    float gravity;                             // Gravity
-    // Sizing & alpha
-    float size_min, size_max;
-    int   alpha_base, alpha_pulse;
-    uint32_t pulse_period_ms;
-    float desaturate;  // 0..1; ERROR mutes the tier color
+    // Status-bar dot geometry
+    constexpr int DOT_X  = 10;
+    constexpr int DOT_Y  = STATUS_Y + STATUS_H / 2;  // vertically centred
+    constexpr int DOT_R  = 6;
+    constexpr int LBL_X  = DOT_X + DOT_R + 6;        // 4px gap after dot
+    constexpr int LBL_Y  = STATUS_Y + (STATUS_H - 16) / 2;  // textSize=2 → 16px tall
+
+    // Battery indicator (top-right of status bar). Body + tab + pct text.
+    //   [ ##### ]| 87%   ← drawn right-to-left
+    constexpr int BATT_BODY_W = 20;
+    constexpr int BATT_BODY_H = 12;
+    constexpr int BATT_TIP_W  = 2;
+    constexpr int BATT_TIP_H  = 6;
+    // Right edge of the tip sits 4px from screen edge.
+    constexpr int BATT_TIP_X  = SCR_W - 4 - BATT_TIP_W;
+    constexpr int BATT_BODY_X = BATT_TIP_X - BATT_BODY_W;
+    constexpr int BATT_BODY_Y = STATUS_Y + (STATUS_H - BATT_BODY_H) / 2;
+    constexpr int BATT_TIP_Y  = STATUS_Y + (STATUS_H - BATT_TIP_H) / 2;
+    // Percentage text: 4 chars max ("100%" / "--%"), 6px each at textSize=1.
+    constexpr int BATT_PCT_W  = 4 * 6;  // 24
+    constexpr int BATT_PCT_X  = BATT_BODY_X - 4 - BATT_PCT_W;
+    constexpr int BATT_PCT_Y  = STATUS_Y + (STATUS_H - 8) / 2;
+
+    // WiFi indicator: 3-bar signal icon in the status bar. Sits to the
+    // left of the battery percent text so the right side reads
+    // "wifi-bars 87% [bat]". Compact — a 16×16 region.
+    constexpr int WIFI_BAR_W  = 4;
+    constexpr int WIFI_BAR_GAP = 2;
+    constexpr int WIFI_BARS    = 3;
+    constexpr int WIFI_W       = WIFI_BARS * WIFI_BAR_W + (WIFI_BARS - 1) * WIFI_BAR_GAP;
+    constexpr int WIFI_H       = 14;  // tallest bar
+    constexpr int WIFI_X       = BATT_PCT_X - WIFI_W - 6;  // 6px gap from "100%"
+    constexpr int WIFI_Y       = STATUS_Y + (STATUS_H - WIFI_H) / 2;
+
+    // SPEAKING-state waveform animation. A 30 px band at the bottom of
+    // the response region, drawn as a continuous oscilloscope-style
+    // waveform: many points across the width, connected by line
+    // segments, each point jittered around the centerline. Looks more
+    // like audio than the original 5-bar bargraph.
+    constexpr int WAVE_H         = 30;
+    constexpr int WAVE_Y         = RESP_Y + RESP_H - WAVE_H;  // bottom of response
+    constexpr int WAVE_MID       = WAVE_Y + WAVE_H / 2;
+    // Number of sample points across the screen. 64 = ~5 px between
+    // points on the 320 px display — fluid enough that the line looks
+    // continuous, sparse enough that fillRect cost stays trivial.
+    constexpr int WAVE_POINTS    = 64;
+    constexpr int WAVE_DX        = SCR_W / WAVE_POINTS;
+    // Max excursion from the centerline. ±13 px keeps the waveform
+    // visually inside the 30 px band with a 1 px margin top/bottom.
+    constexpr int WAVE_AMPLITUDE = (WAVE_H / 2) - 2;
+    // Refresh cadence — 10 Hz looks fluid without burning bus time.
+    constexpr uint32_t WAVE_FRAME_MS = 100;
+}
+
+// ── Per-state colours and labels ─────────────────────────────────────────────
+struct StateStyle {
+    uint16_t bg;
+    uint16_t fg;
+    const char* label;
 };
 
-// Indexed by DeviceState (IDLE=0, LISTENING=1, THINKING=2, SPEAKING=3, ERROR=4)
-//
-// Sizes are deliberately larger than the JS prototype's; on a 320×240
-// integer-pixel raster a "size 1.2" particle's 0.6-pixel core radius
-// rounds to 1 px for everyone, killing the size variation. ~2-6 px
-// puts each layer of the glow at a distinct integer radius and keeps
-// the per-particle size_seed visibly different.
-constexpr Behavior kBehaviors[] = {
-    // IDLE — gentle dispersion, particles repel each other softly
-    { 42, 0.18f, 0.94f, 0.0008f, TargetType::Disperse,
-      38.0f, 0.012f,
-      0,0, 0,0, 0,0,0, 0,
-      2.0f, 4.5f, 90, 30, 4000, 0.0f },
-    // LISTENING (capturing) — horizontal oscillation pumped by mic level
-    { 56, 0.6f, 0.88f, 0.012f, TargetType::Horizontal,
-      0,0,
-      36.0f, 0.012f,
-      0,0, 0,0,0, 0,
-      2.5f, 5.5f, 140, 40, 600, 0.0f },
-    // THINKING — orbital motion around screen center
-    { 42, 0.1f, 0.92f, 0.018f, TargetType::Orbit,
-      0,0, 0,0,
-      38.0f, 0.018f,
-      0,0,0, 0,
-      2.2f, 5.0f, 130, 70, 1100, 0.0f },
-    // SPEAKING — sine wave ripple across the field
-    { 60, 0.4f, 0.86f, 0.008f, TargetType::Wave,
-      0,0, 0,0, 0,0,
-      22.0f, 0.025f, 0.06f,
-      0,
-      3.0f, 6.0f, 160, 50, 350, 0.0f },
-    // ERROR — sparse, falling, color desaturated
-    { 16, 0.04f, 0.98f, 0.0006f, TargetType::Gravity,
-      0,0, 0,0, 0,0, 0,0,0,
-      0.02f,
-      1.5f, 3.0f, 50, 10, 5000, 0.7f },
+static constexpr StateStyle kStyles[] = {
+    { TFT_BLACK,    TFT_DARKGREY, "IDLE"      },  // IDLE
+    { TFT_BLUE,     TFT_WHITE,    "LISTENING" },  // LISTENING
+    { TFT_YELLOW,   TFT_BLACK,    "THINKING"  },  // THINKING
+    { TFT_GREEN,    TFT_BLACK,    "SPEAKING"  },  // SPEAKING
+    { TFT_RED,      TFT_WHITE,    "ERROR"     },  // ERROR
 };
 
-// ── Tier table ──────────────────────────────────────────────────────────────
-struct TierInfo {
-    const char* name;
-    uint8_t r, g, b;
-};
-constexpr TierInfo kTiers[] = {
-    { "QWEN",  0x5F, 0xE3, 0xA1 },  // mint   (Qwen — on-Module router/local)
-    { "LOCAL", 0x7F, 0xC8, 0xFF },  // blue   (OpenClaw gemma)
-    { "CLOUD", 0xC8, 0x9C, 0xFF },  // purple (Claude via OpenClaw)
-    { "HA",    0xFF, 0xB4, 0x54 },  // orange (Home Assistant)
-};
+// Cached state, so setStatus() (which fillRects the entire bar) can repaint
+// the battery indicator with whatever values were last polled, and so
+// updateBattery() (called outside a state change) knows which colours to
+// use. -1 level means "not yet polled" — render an empty icon + "--%".
+namespace {
+    DeviceState g_current_state    = DeviceState::IDLE;
+    int         g_battery_level    = -1;
+    bool        g_battery_charging = false;
+    // WiFi state cached by updateFooter() so setStatus() can repaint the
+    // signal-bar icon after fillRect wipes the status bar. tier is the
+    // string handed in by main.cpp ("LAN"/"TS"/"HOT"/"OFF"/"...").
+    String      g_wifi_tier        = "...";
+    int         g_wifi_rssi        = 0;
 
-// ── Particle ────────────────────────────────────────────────────────────────
-struct Particle {
-    float x, y;
-    float vx, vy;
-    float size_seed;   // 0..1 — sized within behavior min..max
-    float phase;       // alpha-pulse phase offset
-    float seed;        // orbit-radius variation, etc.
-};
+    // OTA badge state. Set true while ArduinoOTA or HTTPUpdate is
+    // active; the footer renderer prepends "OTA " to the tier+RSSI
+    // string. Cached so an updateFooter() called after a tier change
+    // repaints the badge correctly without OtaService having to chase
+    // every footer redraw.
+    bool      g_ota_active = false;
 
-Particle g_particles[kMaxParticles];
-int      g_active = 42;
+    // Waveform animation state. `g_wave_was_speaking` lets tickWaveform()
+    // detect the SPEAKING→other transition and erase exactly once.
+    bool      g_wave_was_speaking = false;
+    uint32_t  g_wave_last_frame_ms = 0;
+    // Tiny PRNG seed advanced per-bar per-frame. xorshift32 is fine for
+    // visual jitter — we just want non-repeating bar heights.
+    uint32_t  g_wave_seed         = 0x1234ABCD;
 
-// State + cache
-DeviceState g_state          = DeviceState::IDLE;
-DeviceState g_state_prev     = DeviceState::IDLE;
-int         g_tier_idx       = 0;     // QWEN by default until main wires getConnectivityTier()
-uint32_t    g_last_frame_ms  = 0;
-uint32_t    g_seed           = 0x1234ABCD;
-float       g_mic_level      = 0.0f;  // 0..1 — synthesized pseudo-amplitude
+    // Paint the wifi signal-bar icon. Three vertical bars of ascending
+    // height. Filled bars = signal strength (3 strong / 2 medium / 1
+    // weak / 0 offline-or-connecting). Colour:
+    //   "OFF"  → red (offline)
+    //   "..."  → yellow (connecting/probing)
+    //   else   → green or fg colour (connected, tier=LAN/TS/HOT)
+    // Outline drawn for empty bars so the icon shape is always readable
+    // against any state-bar background.
+    void drawWifi() {
+        const StateStyle& s = kStyles[static_cast<int>(g_current_state)];
+        const uint16_t bg = s.bg;
+        const uint16_t fg = s.fg;
 
-int    g_battery_level    = -1;
-bool   g_battery_charging = false;
-String g_wifi_tier        = "...";
-int    g_wifi_rssi        = 0;
-bool   g_ota_active       = false;
+        bool offline    = g_wifi_tier.equalsIgnoreCase("OFF");
+        bool connecting = g_wifi_tier.equals("...") || g_wifi_tier.length() == 0;
 
-// Overlay card state — populated by showTranscript/showResponse, fades
-// out after kOverlayHoldMs of inactivity.
-constexpr uint32_t kOverlayHoldMs = 6000;
-String   g_overlay_label;
-String   g_overlay_line;
-String   g_overlay_meta;
-uint32_t g_overlay_until = 0;
+        // Map RSSI to filled-bar count. Defaults: -55 dBm = 3, -70 = 2,
+        // anything weaker = 1. RSSI of 0 dBm is the "no reading" sentinel.
+        int filled;
+        if (offline)         filled = 0;
+        else if (connecting) filled = 0;  // animate later if needed
+        else if (g_wifi_rssi == 0)   filled = 1;
+        else if (g_wifi_rssi >= -55) filled = 3;
+        else if (g_wifi_rssi >= -70) filled = 2;
+        else                         filled = 1;
 
-// Sprite — allocated lazily on first begin(). We use M5Canvas
-// (LovyanGFX's sprite) at 16-bpp; createSprite() prefers PSRAM when
-// available (the CoreS3 has 8 MB).
-M5Canvas g_canvas(&M5.Display);
-bool     g_canvas_ready = false;
+        uint16_t fill_color =
+            offline    ? TFT_RED :
+            connecting ? TFT_YELLOW :
+            fg;
 
-// ── PRNG / math helpers ─────────────────────────────────────────────────────
-inline uint32_t xs32() {
-    g_seed ^= g_seed << 13;
-    g_seed ^= g_seed >> 17;
-    g_seed ^= g_seed << 5;
-    return g_seed;
-}
-inline float frand() {
-    // 24-bit fraction, plenty of resolution for visual jitter.
-    return (float)(xs32() & 0xFFFFFF) / (float)0xFFFFFF;
-}
-inline float frand_signed() { return frand() * 2.0f - 1.0f; }
+        for (int i = 0; i < WIFI_BARS; ++i) {
+            int bar_h = (i + 1) * (WIFI_H / WIFI_BARS);
+            int x     = WIFI_X + i * (WIFI_BAR_W + WIFI_BAR_GAP);
+            int y     = WIFI_Y + (WIFI_H - bar_h);  // bottom-aligned
 
-// ── Color helpers ───────────────────────────────────────────────────────────
-inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
-    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
-}
-struct ColorRGB { uint8_t r, g, b; };
-ColorRGB tierColor(int idx, float desat) {
-    const TierInfo& t = kTiers[idx];
-    if (desat <= 0.0f) return { t.r, t.g, t.b };
-    float lum = 0.299f * t.r + 0.587f * t.g + 0.114f * t.b;
-    return {
-        (uint8_t)(t.r + (lum - t.r) * desat + 0.5f),
-        (uint8_t)(t.g + (lum - t.g) * desat + 0.5f),
-        (uint8_t)(t.b + (lum - t.b) * desat + 0.5f),
-    };
-}
-// argb8888 with real alpha — the canvas is 32bpp (RGBA8888) so
-// LovyanGFX does proper per-pixel alpha blending against whatever's
-// already in the sprite. M5Canvas::pushSprite() down-converts to
-// RGB565 on the way to the panel.
-inline uint32_t argb(const ColorRGB& c, int alpha) {
-    if (alpha < 0)   alpha = 0;
-    if (alpha > 255) alpha = 255;
-    return ((uint32_t)alpha << 24) |
-           ((uint32_t)c.r   << 16) |
-           ((uint32_t)c.g   <<  8) |
-           (uint32_t)c.b;
-}
-
-// ── Particle sim ────────────────────────────────────────────────────────────
-void rebuildParticles(int target_count) {
-    if (target_count > kMaxParticles) target_count = kMaxParticles;
-    // Spawn newcomers across the particle field area only (top STATUS_H
-    // rows are reserved for the bar).
-    while (g_active < target_count) {
-        Particle& p = g_particles[g_active];
-        p.x         = frand() * SCR_W;
-        p.y         = frand() * (SCR_H - STATUS_H);
-        p.vx        = frand_signed() * 0.5f;
-        p.vy        = frand_signed() * 0.5f;
-        p.size_seed = frand();
-        p.phase     = frand() * 6.283185f;
-        p.seed      = frand();
-        ++g_active;
-    }
-    if (g_active > target_count) g_active = target_count;
-}
-
-void updateParticles(const Behavior& b, float t) {
-    const float fw = (float)SCR_W;
-    const float fh = (float)(SCR_H - STATUS_H);
-
-    // Disperse: O(n²) repel pass. Skipped if not the active target.
-    if (b.target_type == TargetType::Disperse) {
-        const float r2 = b.repel_radius * b.repel_radius;
-        for (int i = 0; i < g_active; ++i) {
-            for (int j = i + 1; j < g_active; ++j) {
-                float dx = g_particles[i].x - g_particles[j].x;
-                float dy = g_particles[i].y - g_particles[j].y;
-                float d2 = dx * dx + dy * dy;
-                if (d2 > 1.0f && d2 < r2) {
-                    float d = sqrtf(d2);
-                    float f = b.repel_strength * (1.0f - d2 / r2);
-                    float fx = (dx / d) * f;
-                    float fy = (dy / d) * f;
-                    g_particles[i].vx += fx; g_particles[i].vy += fy;
-                    g_particles[j].vx -= fx; g_particles[j].vy -= fy;
-                }
+            if (i < filled) {
+                M5.Display.fillRect(x, y, WIFI_BAR_W, bar_h, fill_color);
+            } else {
+                // Outline only for empty bars — keeps the icon's shape
+                // visible at "1 bar" or "offline" without it looking
+                // like the icon vanished.
+                uint16_t outline = offline ? TFT_RED : fg;
+                M5.Display.drawRect(x, y, WIFI_BAR_W, bar_h, outline);
             }
+        }
+
+        // Diagonal red slash on the lowest bar when offline — distinct
+        // from a normal "1 bar" connected state.
+        if (offline) {
+            M5.Display.drawLine(WIFI_X, WIFI_Y + WIFI_H - 1,
+                                WIFI_X + WIFI_W - 1, WIFI_Y, TFT_RED);
         }
     }
 
-    for (int i = 0; i < g_active; ++i) {
-        Particle& p = g_particles[i];
-        p.vx += frand_signed() * b.drift;
-        p.vy += frand_signed() * b.drift;
+    // Paint the battery indicator into the status bar using the current
+    // state's bg/fg. Called from setStatus() (after fillRect) and
+    // updateBattery() (which fillRects just the battery region first).
+    void drawBattery() {
+        const StateStyle& s = kStyles[static_cast<int>(g_current_state)];
+        const uint16_t bg = s.bg;
+        const uint16_t fg = s.fg;
 
-        switch (b.target_type) {
-            case TargetType::Horizontal: {
-                float ty = fh * 0.5f
-                         + sinf(p.x * b.oscillate_freq + t * 0.05f)
-                           * b.oscillate_amp * (0.4f + g_mic_level);
-                p.vy += (ty - p.y) * b.target_force;
-                p.vx += (fw * 0.5f - p.x) * b.target_force * 0.3f;
-                break;
+        // Outline + tip in fg.
+        M5.Display.drawRect(BATT_BODY_X, BATT_BODY_Y,
+                            BATT_BODY_W, BATT_BODY_H, fg);
+        M5.Display.fillRect(BATT_TIP_X, BATT_TIP_Y,
+                            BATT_TIP_W, BATT_TIP_H, fg);
+
+        // Inside cleared to bg.
+        M5.Display.fillRect(BATT_BODY_X + 1, BATT_BODY_Y + 1,
+                            BATT_BODY_W - 2, BATT_BODY_H - 2, bg);
+
+        // Fill bar: red below 20%, fg otherwise. Clamp 0..100.
+        int pct = g_battery_level;
+        if (pct >= 0) {
+            if (pct > 100) pct = 100;
+            int bar_w = ((BATT_BODY_W - 4) * pct) / 100;
+            if (bar_w > 0) {
+                uint16_t bar_color = (pct < 20) ? TFT_RED : fg;
+                M5.Display.fillRect(BATT_BODY_X + 2, BATT_BODY_Y + 2,
+                                    bar_w, BATT_BODY_H - 4, bar_color);
             }
-            case TargetType::Orbit: {
-                float cx = fw * 0.5f, cy = fh * 0.5f;
-                float dx = p.x - cx, dy = p.y - cy;
-                float dist = sqrtf(dx * dx + dy * dy) + 0.01f;
-                float td   = b.orbit_radius * (0.7f + 0.6f * p.seed);
-                p.vx += (-dy / dist) * b.orbit_speed;
-                p.vy += ( dx / dist) * b.orbit_speed;
-                float radial_err = (td - dist) * b.target_force;
-                p.vx += (dx / dist) * radial_err;
-                p.vy += (dy / dist) * radial_err;
-                break;
-            }
-            case TargetType::Wave: {
-                float ty = fh * 0.5f
-                         + sinf(p.x * b.wave_freq + t * b.wave_speed)
-                           * b.wave_amp * (0.5f + g_mic_level);
-                p.vy += (ty - p.y) * b.target_force;
-                break;
-            }
-            case TargetType::Gravity:
-                p.vy += b.gravity;
-                break;
-            case TargetType::Disperse:
-            default:
-                // Forces already applied above for Disperse.
-                break;
         }
 
-        p.vx *= b.damping;
-        p.vy *= b.damping;
-        p.x  += p.vx;
-        p.y  += p.vy;
+        // Charging glyph: small bolt overlaid in yellow. Drawn last so it
+        // shows on top of any fill. Skipped on YELLOW backgrounds (THINKING
+        // state) where it'd be invisible — fall back to a contrasting bolt.
+        if (g_battery_charging) {
+            uint16_t bolt = (s.bg == TFT_YELLOW) ? TFT_BLACK : TFT_YELLOW;
+            int cx = BATT_BODY_X + BATT_BODY_W / 2;
+            int top = BATT_BODY_Y + 2;
+            int bot = BATT_BODY_Y + BATT_BODY_H - 3;
+            int mid = BATT_BODY_Y + BATT_BODY_H / 2;
+            // Lightning bolt: top-right → mid-left → bottom-right.
+            M5.Display.drawLine(cx + 2, top, cx - 1, mid, bolt);
+            M5.Display.drawLine(cx - 1, mid, cx + 2, mid, bolt);
+            M5.Display.drawLine(cx + 2, mid, cx - 2, bot, bolt);
+        }
 
-        // Wrap horizontally; bounce vertically inside the field.
-        if (p.x < 0)   p.x += fw;
-        if (p.x > fw)  p.x -= fw;
-        if (p.y < 4)             { p.y = 4;        p.vy = fabsf(p.vy) * 0.5f; }
-        if (p.y > fh - 4)        { p.y = fh - 4;   p.vy = -fabsf(p.vy) * 0.5f; }
+        // Percentage text. Right-aligned at BATT_PCT_X+BATT_PCT_W.
+        char buf[8];
+        if (g_battery_level < 0) {
+            snprintf(buf, sizeof(buf), " --%%");
+        } else {
+            snprintf(buf, sizeof(buf), "%3d%%", pct);
+        }
+        M5.Display.setTextSize(1);
+        M5.Display.setTextColor(fg, bg);
+        M5.Display.setCursor(BATT_PCT_X, BATT_PCT_Y);
+        M5.Display.print(buf);
     }
 }
 
-void drawParticles(const Behavior& b, const ColorRGB& base, float t) {
-    // Field is offset by STATUS_H from top.
-    for (int i = 0; i < g_active; ++i) {
-        Particle& p = g_particles[i];
-        float sz = b.size_min + (b.size_max - b.size_min) * p.size_seed;
-        float phase = (t * 1000.0f / (float)b.pulse_period_ms) * 6.283185f + p.phase;
-        float alpha = (float)b.alpha_base + sinf(phase) * (float)b.alpha_pulse;
-        if (alpha < 0)   alpha = 0;
-        if (alpha > 255) alpha = 255;
-
-        int cx = (int)p.x;
-        int cy = (int)p.y + STATUS_H;
-        // Five-layer "glow": each ring is a decreasing-radius
-        // fillCircle with a real alpha value (canvas is 32bpp). The
-        // outer rings are very dim and largely additive; the inner
-        // rings stack alpha on top to produce a smooth-ish radial
-        // falloff. With 32bpp blending this reads as a soft cloud
-        // rather than the concentric solid rings the 16bpp code drew.
-        int r5 = (int)(sz * 4.0f + 0.5f);
-        int r4 = (int)(sz * 2.8f + 0.5f);
-        int r3 = (int)(sz * 1.9f + 0.5f);
-        int r2 = (int)(sz * 1.2f + 0.5f);
-        int r1 = (int)(sz * 0.6f + 0.5f);
-        if (r5 < 2) r5 = 2;
-        if (r4 < 2) r4 = 2;
-        if (r3 < 1) r3 = 1;
-        if (r2 < 1) r2 = 1;
-        if (r1 < 1) r1 = 1;
-
-        g_canvas.fillCircle(cx, cy, r5, argb(base, (int)(alpha * 0.06f)));
-        g_canvas.fillCircle(cx, cy, r4, argb(base, (int)(alpha * 0.13f)));
-        g_canvas.fillCircle(cx, cy, r3, argb(base, (int)(alpha * 0.27f)));
-        g_canvas.fillCircle(cx, cy, r2, argb(base, (int)(alpha * 0.55f)));
-        g_canvas.fillCircle(cx, cy, r1, argb(base, (int)alpha));
-    }
-}
-
-// ── Status bar ──────────────────────────────────────────────────────────────
-void drawStatusBar(const ColorRGB& base) {
-    // Bar background: very dark teal, semi over the field.
-    g_canvas.fillRect(0, 0, SCR_W, STATUS_H, rgb565(13, 22, 20));
-    g_canvas.drawFastHLine(0, STATUS_H, SCR_W, rgb565(31, 42, 48));
-
-    uint16_t accent = rgb565(base.r, base.g, base.b);
-
-    // Battery icon (left). 18×10 body + 2×4 tip.
-    g_canvas.drawRect(8, 6, 18, 10, accent);
-    g_canvas.fillRect(26, 9, 2, 4, accent);
-    if (g_battery_level > 0) {
-        int pct = g_battery_level > 100 ? 100 : g_battery_level;
-        int bw = (14 * pct) / 100;
-        if (bw > 0) g_canvas.fillRect(10, 8, bw, 6, accent);
-    }
-    g_canvas.setTextSize(1);
-    g_canvas.setTextDatum(textdatum_t::middle_left);
-    g_canvas.setTextColor(accent);
-    char buf[8];
-    if (g_battery_level < 0) snprintf(buf, sizeof(buf), "--%%");
-    else                     snprintf(buf, sizeof(buf), "%d%%", g_battery_level);
-    g_canvas.drawString(buf, 32, 12);
-    if (g_battery_charging) {
-        g_canvas.setTextColor(rgb565(0xFF, 0xB4, 0x54));
-        g_canvas.drawString("+", 55, 12);
-    }
-
-    // OTA badge (only while active) — yellow, sits between battery and wifi.
-    if (g_ota_active) {
-        g_canvas.setTextColor(rgb565(0xFF, 0xB4, 0x54));
-        g_canvas.drawString("OTA", 70, 12);
-    }
-
-    // WiFi connection arc (center-right)
-    int wx = 200, wy = 14;
-    bool offline = g_wifi_tier.equalsIgnoreCase("OFF") || g_wifi_tier.length() == 0
-                   || g_wifi_tier.equals("...");
-    uint16_t wifi_col = offline ? rgb565(0x80, 0x40, 0x40) : accent;
-    // Two concentric arcs + a center dot. drawArc takes start/end in degrees.
-    g_canvas.drawArc(wx, wy, 7, 6, 200, 340, wifi_col);
-    g_canvas.drawArc(wx, wy, 4, 3, 200, 340, wifi_col);
-    g_canvas.fillCircle(wx, wy - 1, 1, wifi_col);
-
-    // Tier badge (right) — outlined pill with the tier name.
-    const char* badge = kTiers[g_tier_idx].name;
-    g_canvas.setTextSize(1);
-    g_canvas.setTextDatum(textdatum_t::middle_center);
-    int badge_w = strlen(badge) * 6 + 16;
-    int badge_x = SCR_W - badge_w - 6;
-    g_canvas.fillRect(badge_x, 4, badge_w, 16,
-                      rgb565(base.r / 5, base.g / 5, base.b / 5));
-    g_canvas.drawRect(badge_x, 4, badge_w, 16, accent);
-    g_canvas.setTextColor(accent);
-    g_canvas.drawString(badge, badge_x + badge_w / 2, 12);
-    g_canvas.setTextDatum(textdatum_t::top_left);
-}
-
-// ── Overlay card ────────────────────────────────────────────────────────────
-void drawOverlayCard() {
-    if (millis() > g_overlay_until) return;
-    if (g_overlay_line.length() == 0) return;
-
-    constexpr int kCardH = 56;
-    int cardY = SCR_H - kCardH - 8;
-    g_canvas.fillRect(8, cardY, SCR_W - 16, kCardH, rgb565(6, 12, 11));
-    g_canvas.drawRect(8, cardY, SCR_W - 16, kCardH, rgb565(31, 42, 48));
-
-    g_canvas.setTextSize(1);
-    g_canvas.setTextColor(rgb565(90, 138, 122));
-    g_canvas.setTextDatum(textdatum_t::top_left);
-    g_canvas.drawString(g_overlay_label.c_str(), 16, cardY + 6);
-
-    g_canvas.setTextColor(rgb565(216, 228, 226));
-    g_canvas.drawString(g_overlay_line.c_str(), 16, cardY + 22);
-
-    if (g_overlay_meta.length() > 0) {
-        g_canvas.setTextColor(rgb565(90, 138, 122));
-        g_canvas.setTextDatum(textdatum_t::top_right);
-        g_canvas.drawString(g_overlay_meta.c_str(), SCR_W - 16, cardY + 6);
-        g_canvas.setTextDatum(textdatum_t::top_left);
-    }
-}
-
-// State-to-mic-level synth. The mic-level field pumps the horizontal
-// oscillation in LISTENING and the wave amplitude in SPEAKING. We
-// don't have a real audio level here yet, so we synthesize one with
-// nested sin() — close enough to "voice in progress" for visual.
-void synthMicLevel(float t) {
-    if (g_state == DeviceState::LISTENING) {
-        g_mic_level = 0.3f + 0.6f * (0.5f + 0.5f * sinf(t * 4.0f + sinf(t * 11.0f) * 2.0f));
-    } else if (g_state == DeviceState::SPEAKING) {
-        g_mic_level = 0.4f + 0.5f * (0.5f + 0.5f * sinf(t * 7.0f + sinf(t * 13.0f) * 1.5f));
-    } else {
-        g_mic_level = 0.0f;
-    }
-}
-}  // namespace
-
-// ── Public API ──────────────────────────────────────────────────────────────
+// ── Public API ────────────────────────────────────────────────────────────────
 void Display::begin() {
     M5.Display.setTextWrap(false);
     M5.Display.fillScreen(TFT_BLACK);
 
-    // Allocate the full-screen sprite at 32bpp (RGBA8888) — the
-    // particle "glow" effect needs real per-pixel alpha blending,
-    // which 16bpp RGB565 doesn't provide. 320×240×4 = 307 KB, lives
-    // in PSRAM (CoreS3 has 8 MB; LGFX prefers PSRAM when available).
-    // pushSprite() down-converts to RGB565 on the way to the panel.
-    g_canvas.setColorDepth(32);
-    if (g_canvas.createSprite(SCR_W, SCR_H)) {
-        g_canvas_ready = true;
-        g_canvas.fillScreen(TFT_BLACK);
-        Serial.printf("[Display] sprite OK 32bpp %dx%d (%u bytes)\n",
-                      SCR_W, SCR_H, (unsigned)(SCR_W * SCR_H * 4));
-    } else {
-        // PSRAM-allocation failure path. Retry at 16bpp so we at least
-        // get something on screen, even though the glow won't blend
-        // properly without a real alpha channel.
-        Serial.println("[Display] 32bpp sprite alloc FAILED — retrying at 16bpp");
-        g_canvas.setColorDepth(16);
-        g_canvas_ready = g_canvas.createSprite(SCR_W, SCR_H);
-        if (g_canvas_ready) g_canvas.fillScreen(TFT_BLACK);
-        else Serial.println("[Display] 16bpp sprite ALSO failed — direct draw fallback");
-    }
+    M5.Display.drawFastHLine(0, DIV1_Y, SCR_W, TFT_DARKGREY);
+    M5.Display.drawFastHLine(0, DIV2_Y, SCR_W, TFT_DARKGREY);
 
-    rebuildParticles(kBehaviors[(int)DeviceState::IDLE].count);
+    setStatus(DeviceState::IDLE);
+    updateFooter("OFF", 0);
 }
 
 void Display::setStatus(DeviceState state) {
-    if (state != g_state) {
-        g_state_prev = g_state;
-        g_state      = state;
-        rebuildParticles(kBehaviors[(int)state].count);
+    g_current_state = state;
+    const StateStyle& s = kStyles[static_cast<int>(state)];
+
+    M5.Display.fillRect(0, STATUS_Y, SCR_W, STATUS_H, s.bg);
+    M5.Display.fillCircle(DOT_X, DOT_Y, DOT_R, s.fg);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextColor(s.fg, s.bg);
+    M5.Display.setCursor(LBL_X, LBL_Y);
+    M5.Display.print(s.label);
+
+    // fillRect wiped the right side of the bar — repaint cached
+    // wifi/battery indicators.
+    drawWifi();
+    drawBattery();
+}
+
+void Display::tickWaveform() {
+    bool speaking = (g_current_state == DeviceState::SPEAKING);
+
+    // Edge case: speaking → not speaking. Erase the strip back to black
+    // exactly once, then leave it alone until the next SPEAKING entry.
+    if (g_wave_was_speaking && !speaking) {
+        M5.Display.fillRect(0, WAVE_Y, SCR_W, WAVE_H, TFT_BLACK);
+        g_wave_was_speaking = false;
+        return;
     }
-}
+    if (!speaking) return;
 
-void Display::setTier(Tier t) {
-    int idx = (int)t;
-    if (idx < 0) idx = 0;
-    if (idx > 3) idx = 3;
-    g_tier_idx = idx;
-}
-
-void Display::tickParticles() {
-    if (!g_canvas_ready) return;
-
+    // Throttle to ~10 Hz. millis() wraparound is harmless because we
+    // compare with subtraction (uint32_t arithmetic).
     uint32_t now = millis();
-    if (now - g_last_frame_ms < kFrameMs) return;
-    g_last_frame_ms = now;
-
-    float t = now * 0.001f;
-    synthMicLevel(t);
-
-    const Behavior& b = kBehaviors[(int)g_state];
-    ColorRGB base = tierColor(g_tier_idx, b.desaturate);
-
-    // Background — slightly different on ERROR (warm tint).
-    if (g_state == DeviceState::ERROR) {
-        g_canvas.fillScreen(rgb565(8, 6, 6));
-    } else {
-        g_canvas.fillScreen(rgb565(6, 8, 8));
+    if (g_wave_was_speaking && (now - g_wave_last_frame_ms) < WAVE_FRAME_MS) {
+        return;
     }
+    g_wave_last_frame_ms = now;
+    g_wave_was_speaking  = true;
 
-    updateParticles(b, t);
-    drawParticles(b, base, t);
+    // xorshift32 — cheap and chaotic enough for waveform jitter.
+    auto rand32 = [](uint32_t& s) {
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        return s;
+    };
 
-    drawStatusBar(base);
-    drawOverlayCard();
+    // Wipe the band, then draw connected line segments across the
+    // width. Each point's Y is centerline ± a random offset; drawing
+    // line(prev, curr) gives a continuous oscilloscope-style trace.
+    M5.Display.fillRect(0, WAVE_Y, SCR_W, WAVE_H, TFT_BLACK);
 
-    g_canvas.pushSprite(0, 0);
+    int prev_x = 0;
+    uint32_t r0 = rand32(g_wave_seed);
+    int prev_y = WAVE_MID + (int)((r0 % (uint32_t)(WAVE_AMPLITUDE * 2 + 1))) - WAVE_AMPLITUDE;
+
+    for (int i = 1; i <= WAVE_POINTS; ++i) {
+        int x = i * WAVE_DX;
+        if (x >= SCR_W) x = SCR_W - 1;
+        uint32_t r = rand32(g_wave_seed);
+        int y = WAVE_MID
+              + (int)((r % (uint32_t)(WAVE_AMPLITUDE * 2 + 1))) - WAVE_AMPLITUDE;
+        M5.Display.drawLine(prev_x, prev_y, x, y, TFT_GREEN);
+        prev_x = x;
+        prev_y = y;
+    }
 }
 
 void Display::updateBattery(int level, bool charging) {
     g_battery_level    = level;
     g_battery_charging = charging;
-    // Reflected on the next tickParticles() — no immediate paint.
+
+    // Wipe just the battery region (icon + pct text) with the current
+    // state's bg, then redraw. Avoid touching the rest of the status bar.
+    const StateStyle& s = kStyles[static_cast<int>(g_current_state)];
+    int wipe_x = BATT_PCT_X;
+    int wipe_w = (BATT_TIP_X + BATT_TIP_W) - BATT_PCT_X;
+    M5.Display.fillRect(wipe_x, STATUS_Y, wipe_w, STATUS_H, s.bg);
+    drawBattery();
 }
 
 void Display::showTranscript(const String& text) {
-    // Maps to the "HEARING" / "ROUTING" / "LAST" labels from the
-    // prototype depending on what state we're currently in.
-    const char* label;
-    switch (g_state) {
-        case DeviceState::LISTENING: label = "HEARING";  break;
-        case DeviceState::THINKING:  label = "ROUTING";  break;
-        default:                     label = "LAST";     break;
-    }
-    g_overlay_label = label;
-    g_overlay_line  = String("\"") + text + "\"";
-    g_overlay_meta  = "";
-    g_overlay_until = millis() + kOverlayHoldMs;
+    M5.Display.fillRect(0, TRANS_Y, SCR_W, TRANS_H, TFT_BLACK);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextWrap(true);
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.setCursor(4, TRANS_Y + 4);
+    M5.Display.print(text);
+    M5.Display.setTextWrap(false);
 }
 
 void Display::showResponse(const String& text) {
-    g_overlay_label = "REPLY";
-    g_overlay_line  = text;
-    g_overlay_meta  = kTiers[g_tier_idx].name;
-    g_overlay_until = millis() + kOverlayHoldMs;
+    M5.Display.fillRect(0, RESP_Y, SCR_W, RESP_H, TFT_BLACK);
+    M5.Display.setTextSize(2);
+    M5.Display.setTextWrap(true);
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.setCursor(4, RESP_Y + 4);
+    M5.Display.print(text);
+    M5.Display.setTextWrap(false);
 }
 
 void Display::updateFooter(const String& tier, int rssi) {
-    // The prototype doesn't have a footer per se — we fold the WiFi
-    // connection state and tier into the top status bar. Keep the
-    // method to preserve the existing FSM/main.cpp wiring.
+    // Cache and repaint the status-bar wifi icon. Wipe just the icon
+    // region (no need to redraw the whole bar) using the current state's
+    // bg colour, then drawWifi() repaints in the matching foreground.
     g_wifi_tier = tier;
     g_wifi_rssi = rssi;
+    {
+        const StateStyle& s = kStyles[static_cast<int>(g_current_state)];
+        M5.Display.fillRect(WIFI_X, STATUS_Y, WIFI_W, STATUS_H, s.bg);
+        drawWifi();
+    }
+
+    M5.Display.fillRect(0, FOOT_Y, SCR_W, FOOT_H, TFT_BLACK);
+    M5.Display.setTextSize(1);
+
+    // Left: optional OTA badge (yellow, attention colour) then tier+RSSI.
+    int x = 4;
+    if (g_ota_active) {
+        M5.Display.setTextColor(TFT_YELLOW, TFT_BLACK);
+        M5.Display.setCursor(x, FOOT_Y + (FOOT_H - 8) / 2);
+        M5.Display.print("OTA ");
+        x += 4 * 6;  // "OTA " = 4 chars × 6 px @ textSize=1
+    }
+    M5.Display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    M5.Display.setCursor(x, FOOT_Y + (FOOT_H - 8) / 2);
+    M5.Display.printf("%s  %ddBm", tier.c_str(), rssi);
+
+    // Right: wall-clock (requires NTP; silently omitted until Phase 4+ wires it up)
+    struct tm t;
+    if (getLocalTime(&t, /*timeoutMs=*/0)) {
+        char buf[9];
+        strftime(buf, sizeof(buf), "%H:%M:%S", &t);
+        // 8 chars × 6px/char (textSize=1) = 48px; right-align with 4px margin
+        M5.Display.setCursor(SCR_W - 48 - 4, FOOT_Y + (FOOT_H - 8) / 2);
+        M5.Display.print(buf);
+    }
 }
 
 void Display::setOtaActive(bool active) {
+    if (g_ota_active == active) return;
     g_ota_active = active;
+    // Repaint the footer using the cached tier+rssi so the badge
+    // appears/disappears immediately. WiFi icon is wiped+redrawn as a
+    // side effect of updateFooter(), but tier/rssi don't change so the
+    // visible result is the same.
+    updateFooter(g_wifi_tier, g_wifi_rssi);
 }
 
 void Display::setBrightness(int v) {
-    if (v < 10)  v = 10;
+    if (v < 10)  v = 10;   // never go fully dark — protects against stale NVS / hostile writes
     if (v > 255) v = 255;
     M5.Display.setBrightness(static_cast<uint8_t>(v));
 }
 
 void Display::drawConfigScreen() {
-    // Bypass the particle system. Static screen, painted once on
-    // entry to Config mode. Voice pipeline ticks (incl. tickParticles)
-    // are gated off in main.cpp while Config is active.
-    M5.Display.fillScreen(0x0841);
+    // Captive-portal mode landing screen. Static — no per-frame redraws.
+    // Color choice mirrors the "config mode" green accent in the web UI
+    // (data/web/style.css var(--accent) #00e676). 0x07E0 is RGB565 green.
+    M5.Display.fillScreen(0x0841);  // very dark blue background
     M5.Display.setTextDatum(top_left);
 
-    M5.Display.setTextColor(0x07E0);
+    // Title
+    M5.Display.setTextColor(0x07E0);  // green
     M5.Display.setTextSize(2);
     M5.Display.setCursor(60, 20);
     M5.Display.print("CONFIG MODE");

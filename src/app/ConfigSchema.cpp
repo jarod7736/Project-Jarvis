@@ -157,17 +157,6 @@ void liveApply(const char* key) {
         // future playback. AudioPlayer::setVolume clamps to [0, 100]
         // and maps to the speaker's 0–255 range internally.
         jarvis::hal::AudioPlayer::setVolume(jarvis::NVSConfig::getTtsVolume());
-    } else if (strcmp(key, "default_tier") == 0) {
-        // The on-device particle field encodes the routing tier as
-        // color (QWEN=mint, LOCAL=blue, CLOUD=purple, HA=orange).
-        // Setting the default tier in the captive portal updates the
-        // displayed color immediately. "auto" maps to QWEN — the
-        // on-Module router sees every query first.
-        const String dt = jarvis::NVSConfig::getDefaultTier();
-        using T = jarvis::hal::Display::Tier;
-        if      (dt == "local") jarvis::hal::Display::setTier(T::LOCAL);
-        else if (dt == "cloud") jarvis::hal::Display::setTier(T::CLOUD);
-        else                     jarvis::hal::Display::setTier(T::QWEN);
     }
     // Future: mic_gain → LLMModule audio.work parameter, wake_sens →
     // KWS threshold. Both want their own design pass — they involve
