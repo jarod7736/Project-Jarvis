@@ -811,3 +811,14 @@ All error paths: set `g_state = ERROR`, call `display.setStatus(ERROR)`, `llmMod
 | No way to re-provision credentials post-deploy | USB Serial provisioning mode in Phase 3 is the escape hatch |
 | Qwen 0.5B hallucination on complex queries | It's a router only — complex queries always escalate to OpenClaw |
 | Correction loops poison memory (ASR misheard, user "corrects" → wrong pair stored) | Distinguish ASR-confidence from intent error; require N=3 consistent corrections before promoting to `prefs.json`; cap `corrections.jsonl` by recency; expose `forget(query)` |
+
+---
+
+## Future Work — UI
+
+The current display is functional but minimal: status bar (color-coded by FSM state), transcript region, response region, footer (tier / RSSI / clock / OTA badge), oscilloscope waveform during SPEAKING. Two known gaps to address after Phase 7 closes:
+
+- **Idle screen.** IDLE currently just shows the word "IDLE". Needs a daily-use surface — clock, calendar/weather widget, wake-word hint, optional next-alarm or HA-quick-state strip.
+- **Touch input.** CoreS3's touchscreen is wired up but unread. Unlocks: settings menu (re-provisioning without serial / NVS wipe), manual wake fallback when KWS misses, conversation-history scrollback, volume control.
+
+Neither is load-bearing for voice loop correctness — they're UX polish. Defer until validation work (soak, degradation matrix) is closed and the firmware is otherwise shippable.
