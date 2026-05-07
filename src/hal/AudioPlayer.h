@@ -57,6 +57,14 @@ public:
     // ends naturally. Used by the FSM to drive SPEAKING → IDLE the
     // same way the existing melotts setOnSpeakDone() does.
     static void setOnPlayDone(OnDoneCb cb);
+
+    // Set output volume as a 0–100 percentage. Mapped internally to
+    // M5.Speaker's 0–255 range. Called by ConfigSchema's live-apply
+    // hook on /api/config POST when `tts_volume` changes, and by
+    // begin() at boot to pick up the NVS-stored value. Clamped to
+    // [0, 100]. Affects this AND future playback because M5.Speaker's
+    // mixer applies volume per output sample.
+    static void setVolume(int pct);
 };
 
 }  // namespace jarvis::hal

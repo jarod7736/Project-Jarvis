@@ -2,6 +2,7 @@
 
 #include <Preferences.h>
 
+#include "../hal/AudioPlayer.h"
 #include "../hal/Display.h"
 #include "NVSConfig.h"
 
@@ -150,10 +151,17 @@ bool writeString(const char* key, const String& v) {
 void liveApply(const char* key) {
     if (strcmp(key, "brightness") == 0) {
         jarvis::hal::Display::setBrightness(jarvis::NVSConfig::getBrightness());
+    } else if (strcmp(key, "tts_volume") == 0) {
+        // M5.Speaker's mixer applies volume per output sample, so the
+        // change takes effect on both currently-streaming audio and
+        // future playback. AudioPlayer::setVolume clamps to [0, 100]
+        // and maps to the speaker's 0–255 range internally.
+        jarvis::hal::AudioPlayer::setVolume(jarvis::NVSConfig::getTtsVolume());
     }
-    // Future: tts_volume → AudioPlayer::setVolume, mic_gain → LLMModule
-    // audio.work parameter. Left out for now — those involve more state
-    // than a single PWM register and want their own design pass.
+    // Future: mic_gain → LLMModule audio.work parameter, wake_sens →
+    // KWS threshold. Both want their own design pass — they involve
+    // re-issuing setup commands to the Module-LLM over UART, which is
+    // more invasive than a single register write.
 }
 
 }  // namespace
