@@ -141,6 +141,19 @@ public:
     // ModeManager to dim/blank the display after inactivity.
     static int  getSleepSecs();
     static bool setSleepSecs(int s);
+
+    // Long-press threshold (ms) for the touchscreen mode-toggle gesture.
+    // Range 500–5000, default 2000. Lower = faster mode-switch but more
+    // accidental triggers. Read by ModeManager::detectLongPress().
+    static int  getHoldMs();
+    static bool setHoldMs(int ms);
+
+    // Release-tolerance (ms) for the long-press detector. Brief
+    // un-touches shorter than this don't reset the press timer — bridges
+    // FT6336 sample dropouts and finger-waver during a sustained hold.
+    // Range 0–500, default 150. 0 disables tolerance (legacy behavior).
+    static int  getHoldSlack();
+    static bool setHoldSlack(int ms);
 };
 
 }  // namespace jarvis

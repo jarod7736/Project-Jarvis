@@ -101,6 +101,10 @@ constexpr ConfigField kSchema[] = {
      false, 10, 255, 180, false, nullptr, nullptr, 0},
     {"sleep_secs",   "Sleep After (sec)",  "display", FieldType::Int,
      false,  0, 600,  60, false, nullptr, nullptr, 0},
+    {"hold_ms",      "Long-Press (ms)",    "display", FieldType::Int,
+     false, 500, 5000, 2000, false, nullptr, nullptr, 0},
+    {"hold_slack",   "Press Slack (ms)",   "display", FieldType::Int,
+     false,   0,  500,  150, false, nullptr, nullptr, 0},
 };
 constexpr size_t kSchemaCount = sizeof(kSchema) / sizeof(kSchema[0]);
 
