@@ -16,6 +16,7 @@
 # Usage:
 #   ./scripts/build.sh            # compile (default)
 #   ./scripts/build.sh upload     # compile + flash (device must be on COMx)
+#   ./scripts/build.sh uploadfs   # build + flash LittleFS image (web UI in data/)
 #   ./scripts/build.sh monitor    # serial monitor on the configured port
 #   ./scripts/build.sh clean      # wipe Windows pio's .pio for this project
 #
@@ -45,11 +46,14 @@ cmd="${1:-run}"
 # the cache preserved, incremental builds for one-file changes are ~10s.
 sync_sources() {
     mkdir -p "$TEMP_DIR"
-    rm -rf "$TEMP_DIR/src" "$TEMP_DIR/lib" "$TEMP_DIR/include"
+    rm -rf "$TEMP_DIR/src" "$TEMP_DIR/lib" "$TEMP_DIR/include" "$TEMP_DIR/data"
     cp -r "$PROJECT_ROOT/src"            "$TEMP_DIR/"
     cp    "$PROJECT_ROOT/platformio.ini" "$TEMP_DIR/"
     if [[ -d "$PROJECT_ROOT/lib"     ]]; then cp -r "$PROJECT_ROOT/lib"     "$TEMP_DIR/"; fi
     if [[ -d "$PROJECT_ROOT/include" ]]; then cp -r "$PROJECT_ROOT/include" "$TEMP_DIR/"; fi
+    # data/ holds the LittleFS web-UI sources packed by `pio run -t uploadfs`.
+    # Sync it on every run so a normal `upload` build doesn't drift behind.
+    if [[ -d "$PROJECT_ROOT/data"    ]]; then cp -r "$PROJECT_ROOT/data"    "$TEMP_DIR/"; fi
 }
 
 case "$cmd" in
@@ -60,6 +64,13 @@ case "$cmd" in
     upload|flash)
         sync_sources
         cd "$TEMP_DIR" && "$PIO" run -e cores3 -t upload
+        ;;
+    uploadfs|fs)
+        # Pack data/ into a LittleFS image and flash to the FS partition.
+        # Firmware is unaffected; this only updates the captive-portal web
+        # assets. Run after editing data/web/* or the partition layout.
+        sync_sources
+        cd "$TEMP_DIR" && "$PIO" run -e cores3 -t uploadfs
         ;;
     monitor)
         # No source sync needed; just attach to the device.
@@ -73,7 +84,7 @@ case "$cmd" in
         echo "Cleaned $TEMP_DIR (next build will be cold, ~100s)"
         ;;
     *)
-        echo "Usage: $0 [run|upload|monitor|clean]" >&2
+        echo "Usage: $0 [run|upload|uploadfs|monitor|clean]" >&2
         exit 2
         ;;
 esac
