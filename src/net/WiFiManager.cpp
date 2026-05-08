@@ -2,7 +2,6 @@
 
 #include <WiFi.h>
 #include <WiFiClient.h>
-#include <WiFiMulti.h>
 
 #include "../app/NVSConfig.h"
 #include "../app/WiFiCreds.h"
@@ -10,7 +9,11 @@
 
 namespace jarvis::net {
 
-static WiFiMulti g_wifi;
+// Per-slot connect budget for connectInSlotOrder(). 8 s gives the
+// usual WPA2 handshake + DHCP a clean shot on a healthy AP without
+// burning the whole connectTimeoutMs on a single failed slot. Tunable
+// if a slow AP needs more.
+static constexpr uint32_t kPerSlotTimeoutMs = 8000;
 
 // Tier cache. Re-probed at most every kTierRecheckMs. Initialized to OFFLINE
 // so any call before begin() reports the correct state.
@@ -67,86 +70,124 @@ static void scanAndPrintSSIDs(uint8_t maxPerPass = 20) {
     }
 }
 
-// Drive WiFiMulti.run() until connected or the budget expires. The set of
-// addAP-registered networks is whatever the caller loaded before this call.
-// Returns true on WL_CONNECTED, false on timeout.
-static bool runUntilConnected(uint32_t connectTimeoutMs, const char* label) {
-    WiFi.mode(WIFI_STA);
-    Serial.printf("[WIFI] Connecting (%s)", label);
-    uint32_t t0 = millis();
-    while (g_wifi.run(500) != WL_CONNECTED && millis() - t0 < connectTimeoutMs) {
-        Serial.print(".");
-    }
-    Serial.println();
-
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("[WIFI] OK ssid=\"%s\" ip=%s rssi=%d ch=%d mac=%s\n",
-                      WiFi.SSID().c_str(),
-                      WiFi.localIP().toString().c_str(),
-                      WiFi.RSSI(),
-                      WiFi.channel(),
-                      WiFi.macAddress().c_str());
-        return true;
-    }
-    Serial.printf("[WIFI] FAILED to connect within %lums (status=%d)\n",
-                  (unsigned long)connectTimeoutMs,
-                  (int)WiFi.status());
-    return false;
-}
-
-// Load up to kMaxNetworks from app::WiFiCreds and register each as a
-// WiFiMulti AP. Returns the count registered. WiFiMulti picks the
-// strongest signal among them at run() time, so the slot order
-// (priority 0 = most recent / preferred) is informational — the radio
-// chooses what's actually reachable.
-static size_t registerAllSavedNetworks() {
+// Iterate saved networks in slot order (slot 0 = highest priority).
+// Each slot gets up to kPerSlotTimeoutMs to associate; on failure we
+// move to the next slot. Total bounded by connectTimeoutMs so a long
+// list of failing APs can't run past the caller's budget.
+//
+// Replaces the prior WiFiMulti.run() flow, which selected by strongest
+// RSSI. RSSI-based selection meant a noisy iPhone hotspot in the same
+// room would always beat the home router across the house, regardless
+// of which slot the user marked "priority 1" in the captive portal.
+// True slot-order priority makes that label do what it says.
+//
+// Runtime auto-reconnect (after a mid-session drop) still goes back to
+// whichever AP the radio last associated with — the ESP32 driver
+// handles that itself. So this function only governs boot-time and
+// post-provision selection. That's the right scope for "priority."
+static bool connectInSlotOrder(uint32_t connectTimeoutMs) {
     jarvis::app::WiFiCreds::Network nets[jarvis::app::WiFiCreds::kMaxNetworks];
     size_t count = 0;
     jarvis::app::WiFiCreds::load(nets, count);
+    if (count == 0) return false;
+
+    WiFi.mode(WIFI_STA);
+    const uint32_t t_start = millis();
+
     for (size_t i = 0; i < count; ++i) {
-        g_wifi.addAP(nets[i].ssid.c_str(), nets[i].password.c_str());
-        Serial.printf("[WIFI] addAP[%u] \"%s\"\n",
-                      (unsigned)i, nets[i].ssid.c_str());
+        const auto& net = nets[i];
+        if (net.ssid.isEmpty()) continue;
+
+        const uint32_t elapsed = millis() - t_start;
+        if (elapsed >= connectTimeoutMs) {
+            Serial.printf("[WIFI] total budget %lums exhausted before slot %u\n",
+                          (unsigned long)connectTimeoutMs, (unsigned)i);
+            return false;
+        }
+        const uint32_t remaining = connectTimeoutMs - elapsed;
+        const uint32_t slot_budget =
+            (kPerSlotTimeoutMs < remaining) ? kPerSlotTimeoutMs : remaining;
+
+        Serial.printf("[WIFI] slot %u \"%s\" (budget=%lums)",
+                      (unsigned)i, net.ssid.c_str(),
+                      (unsigned long)slot_budget);
+
+        // Drop any partial association from a previous slot before a
+        // clean attempt. eraseap=true clears the cached SSID so the
+        // driver doesn't try to resume the previous attempt.
+        WiFi.disconnect(/*wifioff=*/false, /*eraseap=*/true);
+        delay(100);
+
+        WiFi.begin(net.ssid.c_str(), net.password.c_str());
+
+        const uint32_t t_slot = millis();
+        while (WiFi.status() != WL_CONNECTED &&
+               millis() - t_slot < slot_budget) {
+            delay(200);
+            Serial.print(".");
+        }
+        Serial.println();
+
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("[WIFI] OK ssid=\"%s\" ip=%s rssi=%d ch=%d slot=%u mac=%s\n",
+                          WiFi.SSID().c_str(),
+                          WiFi.localIP().toString().c_str(),
+                          WiFi.RSSI(),
+                          WiFi.channel(),
+                          (unsigned)i,
+                          WiFi.macAddress().c_str());
+            return true;
+        }
+
+        Serial.printf("[WIFI] slot %u \"%s\" failed (status=%d), trying next\n",
+                      (unsigned)i, net.ssid.c_str(), (int)WiFi.status());
     }
-    return count;
+
+    Serial.printf("[WIFI] all %u slots exhausted\n", (unsigned)count);
+    return false;
 }
 
 bool WiFiManager::begin(uint32_t connectTimeoutMs) {
     // Multi-network store ("wifi" namespace) holds up to 5 saved
     // networks. WiFiCreds::load() lazy-migrates the legacy single-slot
     // wifi0_ssid into slot 0 on first read, so existing devices upgrade
-    // transparently.
-    size_t saved = registerAllSavedNetworks();
-
-    if (saved == 0) {
-        // First-run provisioning. Dump scan results so the user can
-        // see what SSIDs are visible before pasting a JSON blob.
-        Serial.println("[WIFI] No saved credentials — entering provisioning.");
-        scanAndPrintSSIDs();
-        if (!jarvis::NVSConfig::provisionWiFiFromSerial()) {
-            Serial.println("[WIFI] Provisioning failed; staying offline.");
-            return false;
+    // transparently. We don't register them with anything up front —
+    // connectInSlotOrder() loads them itself and iterates by slot.
+    {
+        jarvis::app::WiFiCreds::Network nets[jarvis::app::WiFiCreds::kMaxNetworks];
+        size_t count = 0;
+        jarvis::app::WiFiCreds::load(nets, count);
+        for (size_t i = 0; i < count; ++i) {
+            Serial.printf("[WIFI] saved[%u] \"%s\"\n",
+                          (unsigned)i, nets[i].ssid.c_str());
         }
-        // Mirror the freshly-provisioned slot into the multi-store so
-        // future boots and the captive-portal UI see it. NVSConfig
-        // wrote to wifi0_ssid; lift it into "wifi"/s0 explicitly rather
-        // than relying on the next boot's lazy migration.
-        String ssid = jarvis::NVSConfig::getWiFi0SSID();
-        String pass = jarvis::NVSConfig::getWiFi0Pass();
-        if (ssid.length()) jarvis::app::WiFiCreds::add(ssid, pass);
-        saved = registerAllSavedNetworks();
+        if (count == 0) {
+            // First-run provisioning. Dump scan results so the user
+            // can see what SSIDs are visible before pasting a JSON
+            // blob.
+            Serial.println("[WIFI] No saved credentials — entering provisioning.");
+            scanAndPrintSSIDs();
+            if (!jarvis::NVSConfig::provisionWiFiFromSerial()) {
+                Serial.println("[WIFI] Provisioning failed; staying offline.");
+                return false;
+            }
+            // Mirror the freshly-provisioned slot into the multi-store
+            // so future boots and the captive-portal UI see it.
+            String ssid = jarvis::NVSConfig::getWiFi0SSID();
+            String pass = jarvis::NVSConfig::getWiFi0Pass();
+            if (ssid.length()) jarvis::app::WiFiCreds::add(ssid, pass);
+        }
     }
 
-    if (runUntilConnected(connectTimeoutMs,
-                          saved == 1 ? "1 saved" : "multi-AP")) {
+    if (connectInSlotOrder(connectTimeoutMs)) {
         return true;
     }
 
     // None of the saved networks were reachable. Show what we DID see
-    // and offer a reprovisioning window — same UX as the legacy
-    // single-slot path, but the new SSID gets pushed to the front of
-    // the multi-store via WiFiCreds::add() so we try it first next
-    // boot without evicting working backups.
+    // and offer a reprovisioning window — the new SSID gets pushed to
+    // the front of the multi-store via WiFiCreds::add() so it lands at
+    // slot 0 (highest priority) for the next attempt without evicting
+    // working backups.
     scanAndPrintSSIDs();
     Serial.println("[WIFI] No saved network reachable. Send a fresh JSON to add one, or wait to stay offline.");
     if (!jarvis::NVSConfig::provisionWiFiFromSerial()) {
@@ -155,11 +196,8 @@ bool WiFiManager::begin(uint32_t connectTimeoutMs) {
     }
     String ssid = jarvis::NVSConfig::getWiFi0SSID();
     String pass = jarvis::NVSConfig::getWiFi0Pass();
-    if (ssid.length()) {
-        jarvis::app::WiFiCreds::add(ssid, pass);
-        g_wifi.addAP(ssid.c_str(), pass.c_str());
-    }
-    return runUntilConnected(connectTimeoutMs, "post-provision");
+    if (ssid.length()) jarvis::app::WiFiCreds::add(ssid, pass);
+    return connectInSlotOrder(connectTimeoutMs);
 }
 
 bool   WiFiManager::isConnected() { return WiFi.status() == WL_CONNECTED; }
