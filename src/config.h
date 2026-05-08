@@ -62,6 +62,21 @@ constexpr float kAsrRule3 = 10.0f;  // total recognition deadline (=kListenTimeo
 // is the known-working baseline that Phase 1 validated.
 constexpr const char* kWakeWord = "HELLO";
 
+// ── Time sync (NTP) ───────────────────────────────────────────────────────
+// On-device time/date queries (via IntentRouter::handleOnDevice) read
+// the ESP32 system clock through getLocalTime(). The clock is set by
+// configTime() after WiFi associates — see WiFiManager::begin(). The
+// timezone is a POSIX TZ string; the default below is US Central w/
+// DST. Override at build time or surface via NVS later if needed.
+//
+// POSIX TZ examples:
+//   "CST6CDT,M3.2.0,M11.1.0"  — US Central
+//   "EST5EDT,M3.2.0,M11.1.0"  — US Eastern
+//   "PST8PDT,M3.2.0,M11.1.0"  — US Pacific
+//   "UTC0"                     — UTC, no DST
+constexpr const char* kNtpServer       = "pool.ntp.org";
+constexpr const char* kTimezoneDefault = "CST6CDT,M3.2.0,M11.1.0";
+
 // ── Connectivity tier probes (PLAN.md Phase 3) ────────────────────────────
 // Defaults from CLAUDE.md "External endpoints". Phase 4 (HA) and Phase 6
 // (OpenClaw) add NVS overrides at keys `ha_host` and `oc_host`.
