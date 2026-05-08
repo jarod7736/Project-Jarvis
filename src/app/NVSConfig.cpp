@@ -258,6 +258,32 @@ bool NVSConfig::setMqttPass(const String& pass) {
     return ok;
 }
 
+// ── Anthropic API direct ──────────────────────────────────────────────────
+String NVSConfig::getAnthKey() {
+    Preferences p; p.begin(NS, true);
+    String s = p.getString("anth_key", "");
+    p.end();
+    return s;
+}
+bool NVSConfig::setAnthKey(const String& key) {
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("anth_key", key) > 0;
+    p.end();
+    return ok;
+}
+String NVSConfig::getAnthModel() {
+    Preferences p; p.begin(NS, true);
+    String s = p.getString("anth_model", "");
+    p.end();
+    return s;
+}
+bool NVSConfig::setAnthModel(const String& model) {
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("anth_model", model) > 0;
+    p.end();
+    return ok;
+}
+
 // ── Captive-portal-surfaced tunables ──────────────────────────────────────
 // Stored as Int/Bool/String in the same "jarvis" namespace. Keys ≤15 chars.
 // Default values mirror the schema in app/ConfigSchema.cpp.
@@ -493,6 +519,8 @@ static bool applyProvisioningJson(const JsonDocument& doc) {
         {"mqtt_host",    false, &NVSConfig::setMqttHost},
         {"mqtt_user",    false, &NVSConfig::setMqttUser},
         {"mqtt_pass",    true,  &NVSConfig::setMqttPass},
+        {"anth_key",     true,  &NVSConfig::setAnthKey},
+        {"anth_model",   false, &NVSConfig::setAnthModel},
     };
     for (const auto& f : string_fields) {
         JsonVariantConst v = doc[f.json];

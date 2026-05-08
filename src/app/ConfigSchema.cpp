@@ -90,6 +90,15 @@ constexpr ConfigField kSchema[] = {
     {"mqtt_pass",    "MQTT Password",      "network", FieldType::String,
      true,  0, 0, 0, false, "", nullptr, 0},
 
+    // ── Anthropic API direct (claude intent) ────────────────────────────
+    // When `anth_key` is set, IntentRouter routes the "claude" intent to
+    // api.anthropic.com directly via net/AnthropicClient. Empty key
+    // falls back to the OpenAI-compat path (LM Studio / OpenClaw).
+    {"anth_key",     "Anthropic API Key",  "network", FieldType::String,
+     true,  0, 0, 0, false, "", nullptr, 0},
+    {"anth_model",   "Anthropic Model",    "network", FieldType::String,
+     false, 0, 0, 0, false, "claude-haiku-4-5-20251001", nullptr, 0},
+
     // ── OTA ─────────────────────────────────────────────────────────────
     {"fw_url",       "Firmware Update URL","network", FieldType::String,
      false, 0, 0, 0, false, "", nullptr, 0},

@@ -56,6 +56,14 @@ public:
     // there's no per-frame redraw needed.
     static void drawConfigScreen();
 
+    // Force a full repaint of the Normal-mode UI (chrome, reactor,
+    // transcript, footer). Use when returning from drawConfigScreen()
+    // — setStatus() alone won't repaint the regions left over from
+    // the Config screen because (a) it early-returns when the FSM
+    // state didn't actually change while paused, and (b) it only
+    // touches chrome + transcript, not the reactor band or footer.
+    static void drawHomeScreen();
+
     // Update the backlight brightness. Range is clamped to [10, 255]
     // to match the schema's validation (and to keep the screen from
     // becoming completely unreadable if a stale or hostile NVS write

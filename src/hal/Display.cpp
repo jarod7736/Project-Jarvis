@@ -543,6 +543,20 @@ void Display::setBrightness(int v) {
     M5.Display.setBrightness(static_cast<uint8_t>(v));
 }
 
+void Display::drawHomeScreen() {
+    // Full repaint of the Normal-mode UI. Drops every pixel left over
+    // from drawConfigScreen() (or any other override) and rebuilds
+    // the chrome / reactor sprite / transcript / footer from cached
+    // state. Forces tickWaveform() to paint the reactor on its next
+    // call by resetting the frame timer.
+    M5.Display.fillScreen(COL_BG);
+    if (g_reactor_ready) g_reactor.fillScreen(COL_BG);
+    drawChrome();
+    drawTranscript();
+    drawFooter();
+    g_last_frame_ms = 0;
+}
+
 void Display::drawConfigScreen() {
     // Bypass the reactor entirely. Static screen, painted once on entry
     // to Config mode (ModeManager pauses the voice loop while up).

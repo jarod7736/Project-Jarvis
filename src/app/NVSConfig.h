@@ -80,6 +80,17 @@ public:
     static String getMqttPass();
     static bool   setMqttPass(const String& pass);
 
+    // Anthropic API (the "claude" intent's direct path). When `anth_key`
+    // is set, IntentRouter routes claude intents to api.anthropic.com
+    // via net/AnthropicClient instead of falling through to LM Studio.
+    // `anth_model` defaults to a Haiku model when unset — fast/cheap
+    // for short voice replies; user can override to Sonnet/Opus via
+    // the captive portal. Both keys are <=15 chars.
+    static String getAnthKey();
+    static bool   setAnthKey(const String& key);
+    static String getAnthModel();
+    static bool   setAnthModel(const String& model);
+
     // Blocks reading USB Serial up to `timeoutMs` for a single JSON line.
     // The provisioning JSON is a bag of optional fields:
     //   {"ssid":"...", "pass":"...", "ha_token":"...", "ha_host":"..."}
