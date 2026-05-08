@@ -6,37 +6,57 @@
 #include "../hal/Display.h"
 #include "../net/CaptivePortal.h"
 #include "../net/WiFiManager.h"
+#include "NVSConfig.h"
 
 namespace jarvis::app {
 
 namespace {
-constexpr uint32_t kHoldMs              = 2000;        // long-press threshold
 constexpr uint32_t kConfigIdleTimeoutMs = 5UL * 60000;  // 5 minutes
+
+// Audio confirmation when a long-press fires. Low frequency reads as a
+// "thump" rather than a beep — short enough to feel like haptic feedback
+// without being annoying. Fires before the mode switch so the user gets
+// the cue even if WiFi/AP startup takes a moment.
+constexpr uint32_t kPressTickHz = 80;
+constexpr uint32_t kPressTickMs = 40;
 
 ModeManager::Mode g_mode = ModeManager::Mode::Normal;
 uint32_t          g_last_activity_ms = 0;
 
-// Long-press detector state. Fires once per held press (>= kHoldMs);
-// requires release before re-arming so a continuous touch doesn't spam.
-bool     g_was_touched = false;
-bool     g_fired       = false;
-uint32_t g_press_start = 0;
+// Long-press detector state. `g_press_start == 0` means no active press;
+// otherwise it's millis() at the moment the press began. `g_last_touch_at`
+// is the most recent millis() where we saw a touch, used to bridge brief
+// FT6336 sample dropouts via the slack window.
+bool     g_fired         = false;
+uint32_t g_press_start   = 0;
+uint32_t g_last_touch_at = 0;
 
-bool detectLongPress() {
-    bool touched = M5.Touch.getCount() > 0;
-    uint32_t now = millis();
+bool detectLongPress(uint32_t hold_ms, uint32_t slack_ms) {
+    bool     touched = M5.Touch.getCount() > 0;
+    uint32_t now     = millis();
 
-    if (touched && !g_was_touched) {
-        g_press_start = now;
-        g_fired = false;
+    if (touched) {
+        // Fresh press if we weren't tracking one, or if the gap since
+        // the last touch sample exceeds slack (i.e. user really did
+        // lift). Otherwise treat this sample as continuation of the
+        // current press — bridges FT6336 dropouts and finger-waver.
+        if (g_press_start == 0 || (now - g_last_touch_at) > slack_ms) {
+            g_press_start = now;
+            g_fired       = false;
+        }
+        g_last_touch_at = now;
+    } else if (g_press_start && (now - g_last_touch_at) > slack_ms) {
+        // Released long enough — clear state so the next press starts
+        // a fresh timer.
+        g_press_start = 0;
+        g_fired       = false;
     }
-    bool out = false;
-    if (touched && !g_fired && (now - g_press_start) >= kHoldMs) {
+
+    if (g_press_start && !g_fired && (now - g_press_start) >= hold_ms) {
         g_fired = true;
-        out = true;
+        return true;
     }
-    g_was_touched = touched;
-    return out;
+    return false;
 }
 
 void redrawAfterModeChange() {
@@ -58,8 +78,17 @@ void ModeManager::begin() {
 }
 
 void ModeManager::tick() {
-    // Mode toggle via long-press.
-    if (detectLongPress()) {
+    // Mode toggle via long-press. Threshold and slack come from NVS so
+    // the user can tune responsiveness without a re-flash. Reading
+    // every tick is fine — Preferences caches; the cost is a couple of
+    // microseconds per call.
+    uint32_t hold_ms  = (uint32_t)NVSConfig::getHoldMs();
+    uint32_t slack_ms = (uint32_t)NVSConfig::getHoldSlack();
+    if (detectLongPress(hold_ms, slack_ms)) {
+        // Audio confirmation — fires before the mode switch so the
+        // user gets the cue even though enterConfig()/enterNormal()
+        // can take a moment (AP startup, STA reconnect).
+        M5.Speaker.tone(kPressTickHz, kPressTickMs);
         if (g_mode == Mode::Config) enterNormal();
         else                        enterConfig();
         return;  // skip remaining checks this tick — mode just changed

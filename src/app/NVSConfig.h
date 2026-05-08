@@ -51,6 +51,15 @@ public:
     static String getTtsModel();
     static bool   setTtsModel(const String& model);
 
+    // Optional prosody hint for OpenAI's `gpt-4o-mini-tts` model. Plain
+    // English description of cadence / emphasis / tone that the model
+    // applies on top of the chosen voice. Ignored by `tts-1` and
+    // `tts-1-hd` (they reject the `instructions` field), so TtsClient
+    // only emits it when `tts_model` starts with "gpt-4o". Empty/unset
+    // → field omitted from the request body.
+    static String getTtsInstructions();
+    static bool   setTtsInstructions(const String& instr);
+
     // OTA (Phase 7). `fw_url` is the firmware bin URL pulled by the
     // "update firmware" voice intent (HTTPUpdate). `ota_pass` is the
     // ArduinoOTA password — when unset, the LAN OTA service stays
@@ -132,6 +141,19 @@ public:
     // ModeManager to dim/blank the display after inactivity.
     static int  getSleepSecs();
     static bool setSleepSecs(int s);
+
+    // Long-press threshold (ms) for the touchscreen mode-toggle gesture.
+    // Range 500–5000, default 2000. Lower = faster mode-switch but more
+    // accidental triggers. Read by ModeManager::detectLongPress().
+    static int  getHoldMs();
+    static bool setHoldMs(int ms);
+
+    // Release-tolerance (ms) for the long-press detector. Brief
+    // un-touches shorter than this don't reset the press timer — bridges
+    // FT6336 sample dropouts and finger-waver during a sustained hold.
+    // Range 0–500, default 150. 0 disables tolerance (legacy behavior).
+    static int  getHoldSlack();
+    static bool setHoldSlack(int ms);
 };
 
 }  // namespace jarvis

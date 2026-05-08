@@ -162,6 +162,22 @@ bool NVSConfig::setTtsModel(const String& model) {
     return ok;
 }
 
+String NVSConfig::getTtsInstructions() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("tts_instr", "");
+    p.end();
+    return s;
+}
+
+bool NVSConfig::setTtsInstructions(const String& instr) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("tts_instr", instr) > 0;
+    p.end();
+    return ok;
+}
+
 String NVSConfig::getFwUrl() {
     Preferences p;
     p.begin(NS, true);
@@ -357,6 +373,34 @@ bool NVSConfig::setSleepSecs(int s) {
     return ok;
 }
 
+int NVSConfig::getHoldMs() {
+    Preferences p; p.begin(NS, true);
+    int v = p.getInt("hold_ms", 2000);
+    p.end();
+    return v;
+}
+bool NVSConfig::setHoldMs(int ms) {
+    if (ms < 500 || ms > 5000) return false;
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putInt("hold_ms", ms) > 0;
+    p.end();
+    return ok;
+}
+
+int NVSConfig::getHoldSlack() {
+    Preferences p; p.begin(NS, true);
+    int v = p.getInt("hold_slack", 150);
+    p.end();
+    return v;
+}
+bool NVSConfig::setHoldSlack(int ms) {
+    if (ms < 0 || ms > 500) return false;
+    Preferences p; if (!p.begin(NS, false)) return false;
+    bool ok = p.putInt("hold_slack", ms) > 0;
+    p.end();
+    return ok;
+}
+
 // Apply a parsed JSON object to NVS. Each present key writes; absent keys
 // are skipped. Returns true if at least one key was applied. Logs every
 // applied key (without echoing secrets — token shows length only).
@@ -443,6 +487,7 @@ static bool applyProvisioningJson(const JsonDocument& doc) {
         {"tts_voice_id", false, &NVSConfig::setTtsVoiceId},
         {"tts_api_key",  true,  &NVSConfig::setTtsApiKey},
         {"tts_model",    false, &NVSConfig::setTtsModel},
+        {"tts_instr",    false, &NVSConfig::setTtsInstructions},
         {"fw_url",       false, &NVSConfig::setFwUrl},
         {"ota_pass",     true,  &NVSConfig::setOtaPass},
         {"mqtt_host",    false, &NVSConfig::setMqttHost},

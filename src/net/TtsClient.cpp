@@ -23,18 +23,21 @@ uint8_t* psramAlloc(size_t n) {
     return reinterpret_cast<uint8_t*>(heap_caps_malloc(n, MALLOC_CAP_8BIT));
 }
 
-// Build the OpenAI request body. Keep it minimal — `model`, `voice`,
-// `input`, and `response_format`. `instructions` (a prosody hint) is the
-// hook we'll use later for the Walken-cadence prompt; not included in
-// MVP because it requires the gpt-4o-mini-tts model and we want tts-1's
-// lower latency for now.
+// Build the OpenAI request body. `instructions` is a prosody hint
+// supported only by `gpt-4o-mini-tts` — `tts-1` and `tts-1-hd` reject
+// the field with a 400, so we only emit it when the model name starts
+// with "gpt-4o". Empty `instructions` is also omitted regardless of
+// model (no point sending an empty string).
 String buildOpenAiBody(const String& text, const String& voice,
-                       const String& model) {
+                       const String& model, const String& instructions) {
     JsonDocument req;
     req["model"]           = model;
     req["voice"]           = voice;
     req["input"]           = text;
     req["response_format"] = "mp3";
+    if (instructions.length() > 0 && model.startsWith("gpt-4o")) {
+        req["instructions"] = instructions;
+    }
     String body;
     serializeJson(req, body);
     return body;
@@ -118,7 +121,8 @@ Mp3Buffer downloadBody(HTTPClient& http, int code) {
 }
 
 Mp3Buffer synthOpenAi(const String& text, const String& voice,
-                      const String& model, const String& apiKey) {
+                      const String& model, const String& apiKey,
+                      const String& instructions) {
     using namespace jarvis::config;
 
     WiFiClientSecure secure;
@@ -136,7 +140,7 @@ Mp3Buffer synthOpenAi(const String& text, const String& voice,
     http.addHeader("Content-Type",  "application/json");
     http.addHeader("Accept",        "audio/mpeg");
 
-    String body = buildOpenAiBody(text, voice, model);
+    String body = buildOpenAiBody(text, voice, model, instructions);
     Serial.printf("[TtsClient] POST %s body=%u chars\n", url.c_str(),
                   (unsigned)body.length());
     int code = http.POST(body);
@@ -188,17 +192,18 @@ Mp3Buffer TtsClient::synthesize(const String& text) {
         return Mp3Buffer{};
     }
 
-    String provider = jarvis::NVSConfig::getTtsProvider();
-    String voice    = jarvis::NVSConfig::getTtsVoiceId();
-    String model    = jarvis::NVSConfig::getTtsModel();
-    String apiKey   = jarvis::NVSConfig::getTtsApiKey();
+    String provider     = jarvis::NVSConfig::getTtsProvider();
+    String voice        = jarvis::NVSConfig::getTtsVoiceId();
+    String model        = jarvis::NVSConfig::getTtsModel();
+    String apiKey       = jarvis::NVSConfig::getTtsApiKey();
+    String instructions = jarvis::NVSConfig::getTtsInstructions();
 
-    Serial.printf("[TtsClient] synth provider=%s voice=%s model=%s len=%u\n",
+    Serial.printf("[TtsClient] synth provider=%s voice=%s model=%s instr=%u len=%u\n",
                   provider.c_str(), voice.c_str(), model.c_str(),
-                  (unsigned)text.length());
+                  (unsigned)instructions.length(), (unsigned)text.length());
 
     if (provider.equalsIgnoreCase("openai")) {
-        return synthOpenAi(text, voice, model, apiKey);
+        return synthOpenAi(text, voice, model, apiKey, instructions);
     }
     if (provider.equalsIgnoreCase("eleven") ||
         provider.equalsIgnoreCase("elevenlabs")) {
