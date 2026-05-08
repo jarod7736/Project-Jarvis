@@ -176,28 +176,27 @@ RouteResult dispatchByIntent(const String& transcript, const String& intent,
         return {false, String(jarvis::config::kOtaSpeakFailed)};
     }
     if (intent == "local_llm" || intent == "claude") {
-        // Tier-gate: both LAN and TAILSCALE have OpenClaw reachable;
-        // claude-direct (api.anthropic.com) needs LAN. HOTSPOT_ONLY
-        // and OFFLINE bail out so we don't burn 5+ seconds on a doomed
-        // HTTP attempt.
-        if (tier != jarvis::net::ConnectivityTier::LAN &&
-            tier != jarvis::net::ConnectivityTier::TAILSCALE) {
-            return {false, String("I can't reach my brain right now.")};
-        }
-
         const String& prompt = query.length() ? query : transcript;
         String reply;
 
-        // Direct Anthropic API path. Active only for the "claude"
-        // intent and only when the user has set anth_key in NVS via
-        // the captive portal (or USB-Serial provisioning). Otherwise
-        // we fall through to LM Studio / OpenClaw with the
-        // kOcClaudeModel string — which today is unloaded on the
-        // user's LM Studio and will fail, but the structure is in
-        // place for future proxying.
+        // Two backends with different reachability requirements:
+        //   - AnthropicClient hits api.anthropic.com — a public
+        //     internet endpoint. Works on any non-OFFLINE tier
+        //     (LAN, TAILSCALE, or HOTSPOT_ONLY all have internet).
+        //   - LLMClient (OpenClaw / LM Studio) lives on the home LAN
+        //     or via Tailscale. HOTSPOT_ONLY can't reach it, so we
+        //     bail with the canned "brain" response instead of
+        //     burning 5+ seconds on a doomed HTTP attempt.
         if (intent == "claude" && jarvis::net::AnthropicClient::isConfigured()) {
+            if (tier == jarvis::net::ConnectivityTier::OFFLINE) {
+                return {false, String("I can't reach my brain right now.")};
+            }
             reply = jarvis::net::AnthropicClient::query(prompt);
         } else {
+            if (tier != jarvis::net::ConnectivityTier::LAN &&
+                tier != jarvis::net::ConnectivityTier::TAILSCALE) {
+                return {false, String("I can't reach my brain right now.")};
+            }
             const char* model = (intent == "claude")
                                     ? jarvis::config::kOcClaudeModel
                                     : jarvis::config::kOcLocalModel;
