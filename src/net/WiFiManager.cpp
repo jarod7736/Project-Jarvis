@@ -2,6 +2,7 @@
 
 #include <WiFi.h>
 #include <WiFiClient.h>
+#include <time.h>
 
 #include "../app/NVSConfig.h"
 #include "../app/WiFiCreds.h"
@@ -14,6 +15,25 @@ namespace jarvis::net {
 // burning the whole connectTimeoutMs on a single failed slot. Tunable
 // if a slow AP needs more.
 static constexpr uint32_t kPerSlotTimeoutMs = 8000;
+
+// Kick off an SNTP sync against the configured NTP server with the
+// configured POSIX timezone. configTime() is non-blocking — the IDF's
+// SNTP client runs the actual exchange in the background and updates
+// the system clock when a response arrives (typically within 1–2 s on
+// a healthy network). getLocalTime() will start returning true once
+// the first sync completes.
+//
+// Idempotent: safe to call on every reconnect. configTime() reinit's
+// the SNTP state machine without leaking handles.
+static void kickNtpSync() {
+    setenv("TZ", jarvis::config::kTimezoneDefault, /*overwrite=*/1);
+    tzset();
+    configTime(/*gmtOffset_sec=*/0, /*daylightOffset_sec=*/0,
+               jarvis::config::kNtpServer);
+    Serial.printf("[WIFI] NTP sync requested (server=%s tz=%s)\n",
+                  jarvis::config::kNtpServer,
+                  jarvis::config::kTimezoneDefault);
+}
 
 // Tier cache. Re-probed at most every kTierRecheckMs. Initialized to OFFLINE
 // so any call before begin() reports the correct state.
@@ -136,6 +156,7 @@ static bool connectInSlotOrder(uint32_t connectTimeoutMs) {
                           WiFi.channel(),
                           (unsigned)i,
                           WiFi.macAddress().c_str());
+            kickNtpSync();
             return true;
         }
 

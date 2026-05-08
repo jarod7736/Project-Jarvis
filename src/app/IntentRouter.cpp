@@ -9,6 +9,7 @@
 #include "../net/OtaService.h"
 #include "../net/WiFiManager.h"
 #include "CommandHandler.h"
+#include "MathParser.h"
 #include "NVSConfig.h"
 
 namespace jarvis::app {
@@ -63,8 +64,25 @@ RouteResult handleOnDevice(const String& query) {
         return {true, String(buf)};
     }
 
-    // Timer / reminder / math not yet implemented.
-    return {false, String("On-device timers and math are coming soon.")};
+    // Math — single binary op like "what is twelve plus seventeen".
+    // MathParser handles words-to-numbers, operator detection, and the
+    // computation; the router's job here is just to format the result.
+    if (looksLikeMath(q)) {
+        MathResult m = parseAndEvaluate(q);
+        if (m.ok) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%lld.", (long long)m.value);
+            return {true, String(buf)};
+        }
+        if (m.error.length() > 0) {
+            return {false, m.error};
+        }
+        // Operator was present but parsing failed — fall through to
+        // the "coming soon" stub below so the user still gets feedback.
+    }
+
+    // Timer / reminder not yet implemented.
+    return {false, String("On-device timers are coming soon.")};
 }
 
 // Keyword-based intent classification. Qwen 0.5B (prefill-20e variant on
@@ -113,6 +131,14 @@ const char* classifyByKeyword(const String& lc) {
         lc.indexOf("set a timer") >= 0 ||
         lc.indexOf("set timer")  >= 0 ||
         lc.indexOf("remind me")  >= 0) {
+        return "on_device";
+    }
+
+    // Math also goes on-device. Detect by operator words ("plus",
+    // "minus", "times", "divided by", etc.) — these phrases all start
+    // with "what is"/"what's"/"calculate" and the local_llm block
+    // below catches "what is", so the math check has to come first.
+    if (looksLikeMath(lc)) {
         return "on_device";
     }
 
