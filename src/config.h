@@ -48,9 +48,14 @@ constexpr float kAsrRule2 = 1.2f;   // max interval between recognized chunks
 constexpr float kAsrRule3 = 10.0f;  // total recognition deadline (=kListenTimeoutMs)
 
 // ── Wake word ─────────────────────────────────────────────────────────────
-// Phase 2.5 retrains the KWS asset for "JARVIS" and flips this constant.
-// Until then we use the bundled HELLO model that Phase 1 already validated.
-constexpr const char* kWakeWord = "HELLO";
+// StackFlow's KWS unit accepts an arbitrary all-caps English wake word
+// at runtime via the `kws` field in kws.setup — no custom-trained model
+// required. The underlying sherpa-onnx Zipformer (gigaspeech-3.3M)
+// generalises to any in-vocab word. Constraints:
+//   - Must be ALL CAPS for English (lowercase rejected by the daemon)
+//   - No mixing English + Chinese in the same string
+//   - kws.setup takes ~9 s on cold boot; existing setup timeout covers it
+constexpr const char* kWakeWord = "JARVIS";
 
 // ── Connectivity tier probes (PLAN.md Phase 3) ────────────────────────────
 // Defaults from CLAUDE.md "External endpoints". Phase 4 (HA) and Phase 6
