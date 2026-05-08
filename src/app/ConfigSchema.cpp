@@ -79,6 +79,8 @@ constexpr ConfigField kSchema[] = {
      false, 0, 0, 0, false, "onyx", nullptr, 0},
     {"tts_api_key",  "TTS API Key",        "network", FieldType::String,
      true,  0, 0, 0, false, "", nullptr, 0},
+    {"tts_instr",    "TTS Prosody Hint",   "network", FieldType::String,
+     false, 0, 0, 0, false, "", nullptr, 0},
 
     // ── MQTT ────────────────────────────────────────────────────────────
     {"mqtt_host",    "MQTT Broker Host",   "network", FieldType::String,

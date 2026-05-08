@@ -162,6 +162,22 @@ bool NVSConfig::setTtsModel(const String& model) {
     return ok;
 }
 
+String NVSConfig::getTtsInstructions() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("tts_instr", "");
+    p.end();
+    return s;
+}
+
+bool NVSConfig::setTtsInstructions(const String& instr) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("tts_instr", instr) > 0;
+    p.end();
+    return ok;
+}
+
 String NVSConfig::getFwUrl() {
     Preferences p;
     p.begin(NS, true);
@@ -443,6 +459,7 @@ static bool applyProvisioningJson(const JsonDocument& doc) {
         {"tts_voice_id", false, &NVSConfig::setTtsVoiceId},
         {"tts_api_key",  true,  &NVSConfig::setTtsApiKey},
         {"tts_model",    false, &NVSConfig::setTtsModel},
+        {"tts_instr",    false, &NVSConfig::setTtsInstructions},
         {"fw_url",       false, &NVSConfig::setFwUrl},
         {"ota_pass",     true,  &NVSConfig::setOtaPass},
         {"mqtt_host",    false, &NVSConfig::setMqttHost},

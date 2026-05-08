@@ -51,6 +51,15 @@ public:
     static String getTtsModel();
     static bool   setTtsModel(const String& model);
 
+    // Optional prosody hint for OpenAI's `gpt-4o-mini-tts` model. Plain
+    // English description of cadence / emphasis / tone that the model
+    // applies on top of the chosen voice. Ignored by `tts-1` and
+    // `tts-1-hd` (they reject the `instructions` field), so TtsClient
+    // only emits it when `tts_model` starts with "gpt-4o". Empty/unset
+    // → field omitted from the request body.
+    static String getTtsInstructions();
+    static bool   setTtsInstructions(const String& instr);
+
     // OTA (Phase 7). `fw_url` is the firmware bin URL pulled by the
     // "update firmware" voice intent (HTTPUpdate). `ota_pass` is the
     // ArduinoOTA password — when unset, the LAN OTA service stays
