@@ -22,17 +22,47 @@
 #
 # Run from Git Bash (mingw) on Windows. Requires Windows PlatformIO at the
 # default location below.
+#
+# Native Linux / macOS / WSL: set the PIO env var to your local pio binary
+# (e.g. `export PIO=~/.pio-venv/bin/pio`). When PIO is overridden, the
+# copy-to-temp-dir workaround is skipped and pio runs directly in
+# $PROJECT_ROOT — the SMB-hang issue doesn't apply outside Git-Bash.
 
 set -euo pipefail
 
-PIO="/c/Users/jarod/.platformio/penv/Scripts/platformio.exe"
+# Default to the Git-Bash-on-Windows pio path that motivated this script.
+# Override with the PIO env var (e.g. `PIO=~/.pio-venv/bin/pio`) to use a
+# native Linux / macOS / WSL pio install. Aliases don't carry into child
+# processes — pass an absolute path.
+PIO="${PIO:-/c/Users/jarod/.platformio/penv/Scripts/platformio.exe}"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMP_DIR="/c/Users/jarod/AppData/Local/Temp/jarvis-build"
 
 if [[ ! -x "$PIO" ]]; then
-    echo "ERROR: Windows PlatformIO not found at $PIO" >&2
-    echo "Install via VS Code's PlatformIO extension or pip --user." >&2
+    echo "ERROR: PlatformIO not found at $PIO" >&2
+    echo "Set PIO=/path/to/pio or install via VS Code's PlatformIO extension or pip --user." >&2
     exit 1
+fi
+
+# The copy-to-temp-dir dance is specifically a workaround for Windows pio
+# hanging at "Processing cores3..." against SMB-mounted WSL paths. It's
+# unnecessary on native Linux / macOS / WSL where pio runs directly
+# against PROJECT_ROOT. When PIO is overridden via env var the user is
+# necessarily not in the original Windows-against-SMB scenario, so skip
+# the copy. Force-override with PIO_USE_TEMP=true|false.
+PIO_USE_TEMP="${PIO_USE_TEMP:-auto}"
+if [[ "$PIO_USE_TEMP" == "auto" ]]; then
+    if [[ "$PIO" == "/c/Users/jarod/.platformio/penv/Scripts/platformio.exe" ]]; then
+        PIO_USE_TEMP=true
+    else
+        PIO_USE_TEMP=false
+    fi
+fi
+
+if [[ "$PIO_USE_TEMP" == "true" ]]; then
+    WORK_DIR="$TEMP_DIR"
+else
+    WORK_DIR="$PROJECT_ROOT"
 fi
 
 cmd="${1:-run}"
@@ -45,6 +75,8 @@ cmd="${1:-run}"
 # that wipes .pio/build/ and forces a 100s cold rebuild every time. With
 # the cache preserved, incremental builds for one-file changes are ~10s.
 sync_sources() {
+    # No-op when running pio directly in PROJECT_ROOT (native Linux/Mac/WSL).
+    [[ "$PIO_USE_TEMP" != "true" ]] && return 0
     mkdir -p "$TEMP_DIR"
     rm -rf "$TEMP_DIR/src" "$TEMP_DIR/lib" "$TEMP_DIR/include" "$TEMP_DIR/data"
     cp -r "$PROJECT_ROOT/src"            "$TEMP_DIR/"
@@ -59,29 +91,34 @@ sync_sources() {
 case "$cmd" in
     run|build|compile)
         sync_sources
-        cd "$TEMP_DIR" && "$PIO" run -e cores3
+        cd "$WORK_DIR" && "$PIO" run -e cores3
         ;;
     upload|flash)
         sync_sources
-        cd "$TEMP_DIR" && "$PIO" run -e cores3 -t upload
+        cd "$WORK_DIR" && "$PIO" run -e cores3 -t upload
         ;;
     uploadfs|fs)
         # Pack data/ into a LittleFS image and flash to the FS partition.
         # Firmware is unaffected; this only updates the captive-portal web
         # assets. Run after editing data/web/* or the partition layout.
         sync_sources
-        cd "$TEMP_DIR" && "$PIO" run -e cores3 -t uploadfs
+        cd "$WORK_DIR" && "$PIO" run -e cores3 -t uploadfs
         ;;
     monitor)
         # No source sync needed; just attach to the device.
-        cd "$TEMP_DIR" 2>/dev/null || cd "$PROJECT_ROOT"
+        cd "$WORK_DIR" 2>/dev/null || cd "$PROJECT_ROOT"
         "$PIO" device monitor
         ;;
     clean)
         # Full nuke — useful when libdeps drift or build state is corrupt.
         # Day-to-day rebuilds should never need this.
-        rm -rf "$TEMP_DIR"
-        echo "Cleaned $TEMP_DIR (next build will be cold, ~100s)"
+        if [[ "$PIO_USE_TEMP" == "true" ]]; then
+            rm -rf "$TEMP_DIR"
+            echo "Cleaned $TEMP_DIR (next build will be cold, ~100s)"
+        else
+            rm -rf "$PROJECT_ROOT/.pio"
+            echo "Cleaned $PROJECT_ROOT/.pio (next build will be cold, ~100s)"
+        fi
         ;;
     *)
         echo "Usage: $0 [run|upload|uploadfs|monitor|clean]" >&2
