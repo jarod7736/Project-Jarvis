@@ -2,7 +2,10 @@
 
 // WiFiManager — Phase 3 WiFi bring-up + connectivity-tier classification.
 //
-// Per CLAUDE.md: per-AP WiFi timeout via WiFiMulti.run(500) for fast failover.
+// Saved networks are tried in slot order (slot 0 = highest priority).
+// Each slot gets a per-slot connect budget; on failure we move to the
+// next slot. This replaces the prior WiFiMulti strongest-RSSI behavior
+// so the captive-portal "priority N" labels are authoritative.
 //
 // Connectivity-tier classification determines which backends are reachable
 // from the current network. Routing code (Phase 5+) branches on this.
@@ -22,9 +25,10 @@ const char* tierName(ConnectivityTier t);   // "OFFLINE" / "HOT" / "TS" / "LAN"
 
 class WiFiManager {
 public:
-    // Read NVS-stored creds (slot 0). If absent, run USB-Serial provisioning,
-    // then attempt WiFi.connect via WiFiMulti for at most `connectTimeoutMs`.
-    // Non-blocking past timeout — returns false rather than hanging the boot.
+    // Iterate saved networks in slot-priority order, attempting each
+    // until one connects or `connectTimeoutMs` elapses. If no slots
+    // are saved, runs USB-Serial provisioning first. Non-blocking past
+    // the budget — returns false rather than hanging the boot.
     static bool begin(uint32_t connectTimeoutMs = 20000);
 
     static bool   isConnected();
