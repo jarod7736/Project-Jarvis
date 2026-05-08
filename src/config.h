@@ -55,7 +55,12 @@ constexpr float kAsrRule3 = 10.0f;  // total recognition deadline (=kListenTimeo
 //   - Must be ALL CAPS for English (lowercase rejected by the daemon)
 //   - No mixing English + Chinese in the same string
 //   - kws.setup takes ~9 s on cold boot; existing setup timeout covers it
-constexpr const char* kWakeWord = "JARVIS";
+//
+// Reverted to "HELLO" temporarily — "JARVIS" was set on hardware and
+// failed to wake (silent kws.setup failure, possibly missing model
+// package or library forcing a stale model name). Debug later; HELLO
+// is the known-working baseline that Phase 1 validated.
+constexpr const char* kWakeWord = "HELLO";
 
 // ── Connectivity tier probes (PLAN.md Phase 3) ────────────────────────────
 // Defaults from CLAUDE.md "External endpoints". Phase 4 (HA) and Phase 6
