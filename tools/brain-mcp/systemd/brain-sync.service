@@ -1,0 +1,16 @@
+[Unit]
+Description=brain-mcp vault sync (git pull --ff-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Override these in a drop-in (/etc/systemd/system/brain-sync.service.d/override.conf)
+# rather than editing this file. User must own the vault working tree and
+# have an SSH agent or deploy key configured for the remote.
+User=lobsterboy
+Environment=BRAIN_VAULT_PATH=/srv/2ndbrain
+ExecStart=/usr/bin/git -C ${BRAIN_VAULT_PATH} pull --ff-only origin main
+# Pull failures (network glitch, conflict, auth) should not block other
+# units. Log and continue.
+SuccessExitStatus=0 1
