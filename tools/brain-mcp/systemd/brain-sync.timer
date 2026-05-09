@@ -1,0 +1,13 @@
+[Unit]
+Description=Pull 2nd Brain vault from GitHub every 5 minutes
+
+[Timer]
+# 30s after boot, then every 5 minutes. Persistent=true catches up after
+# the host was offline.
+OnBootSec=30
+OnUnitActiveSec=5min
+Persistent=true
+Unit=brain-sync.service
+
+[Install]
+WantedBy=timers.target
