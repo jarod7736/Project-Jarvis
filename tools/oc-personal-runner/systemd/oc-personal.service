@@ -1,0 +1,34 @@
+[Unit]
+Description=oc-personal-runner — chat-completions front for Jarvis (Phase 8)
+After=network-online.target
+Wants=network-online.target
+# Soft dependency on brain-sync — we want the vault freshly pulled before
+# the agent answers, but it's fine if the timer fires after we start.
+After=brain-sync.service
+
+[Service]
+Type=simple
+User=lobsterboy
+WorkingDirectory=/home/lobsterboy/project-jarvis/tools/oc-personal-runner
+# Override these in a drop-in (/etc/systemd/system/oc-personal.service.d/override.conf)
+# rather than editing this file. ANTHROPIC_API_KEY especially should not live
+# in the unit text — use EnvironmentFile= pointing at a 0600-permissioned env file.
+Environment=OC_LISTEN_HOST=0.0.0.0
+Environment=OC_LISTEN_PORT=8080
+Environment=OC_LMSTUDIO_URL=http://192.168.1.108:1234
+Environment=OC_PERSONAL_MODEL=oc-personal
+Environment=OC_ANTHROPIC_MODEL=claude-sonnet-4-7
+Environment=OC_MAX_TURNS=4
+Environment=OC_MAX_OUTPUT_TOKENS=200
+Environment=BRAIN_VAULT_PATH=/srv/2ndbrain
+Environment=OC_BRAIN_MCP_COMMAND=/home/lobsterboy/project-jarvis/tools/brain-mcp/.venv/bin/python
+Environment=OC_BRAIN_MCP_ARGS=-m brain_mcp.server
+EnvironmentFile=-/etc/oc-personal/secrets.env
+ExecStart=/home/lobsterboy/project-jarvis/tools/oc-personal-runner/.venv/bin/python -m oc_personal.server
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
