@@ -99,6 +99,13 @@ constexpr uint16_t    kOpenclawPortDefault = 1234;
 // fail until configured); kept here so the routing structure is in place.
 constexpr const char* kOcLocalModel  = "google/gemma-4-e4b";
 constexpr const char* kOcClaudeModel = "claude-sonnet-4-6";  // TBD
+// Personal-mode model alias on OpenClaw — agent loop with brain-mcp
+// tools attached (PLAN.md Phase 8). Same /v1/chat/completions wire
+// shape as the others; OpenClaw recognizes the model name and runs
+// brain_search / brain_capture / brain_lint / brain_ingest internally.
+// Until brain-mcp is deployed on lobsterboy this routes to a 404 and
+// the personal_query / journal_note paths fall back to ERR_PERSONAL_OFFLINE.
+constexpr const char* kOcPersonalModel = "oc-personal";
 
 // HTTP timeout for the OpenClaw call. PLAN.md says 10s; the Tailscale
 // network adds a small margin to that.
@@ -209,5 +216,6 @@ constexpr const char* kErrHaUnreachable  = "I couldn't reach home assistant.";
 constexpr const char* kErrLlmTimeout     = "That's taking too long. Try again.";
 constexpr const char* kErrIntentParse    = "I wasn't sure what you meant. Could you rephrase?";
 constexpr const char* kErrModuleOffline  = "My A I module is restarting.";
+constexpr const char* kErrPersonalOffline = "I can't reach my notes right now.";
 
 }  // namespace jarvis::config

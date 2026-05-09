@@ -101,6 +101,41 @@ const char* classifyByKeyword(const String& lc) {
         return "update_fw";
     }
 
+    // Brain write-back — "note that ...", "save this ...", "log this ..."
+    // Specific trigger phrases only; "remember to turn off the lights"
+    // (no "that") deliberately does NOT match so HA still wins.
+    if (lc.indexOf("note that")          >= 0 ||
+        lc.indexOf("remember that")      >= 0 ||
+        lc.indexOf("save this to my")    >= 0 ||
+        lc.indexOf("save that to my")    >= 0 ||
+        lc.indexOf("save to my brain")   >= 0 ||
+        lc.indexOf("save to my notes")   >= 0 ||
+        lc.indexOf("add to my brain")    >= 0 ||
+        lc.indexOf("add to my notes")    >= 0 ||
+        lc.indexOf("make a note")        >= 0 ||
+        lc.indexOf("log this")           >= 0 ||
+        lc.indexOf("journal that")       >= 0 ||
+        lc.indexOf("write this down")    >= 0) {
+        return "journal_note";
+    }
+
+    // Brain read — "what do I know about ...", "in my wiki", etc. Placed
+    // before the local_llm "what is" trigger so personal queries don't
+    // get routed to the generic LLM.
+    if (lc.indexOf("what do i know")     >= 0 ||
+        lc.indexOf("have i read")        >= 0 ||
+        lc.indexOf("what's in my wiki")  >= 0 ||
+        lc.indexOf("what is in my wiki") >= 0 ||
+        lc.indexOf("in my wiki")         >= 0 ||
+        lc.indexOf("in my brain")        >= 0 ||
+        lc.indexOf("in my notes")        >= 0 ||
+        lc.indexOf("from my notes")      >= 0 ||
+        lc.indexOf("according to my notes") >= 0 ||
+        lc.indexOf("in my second brain") >= 0 ||
+        lc.indexOf("in my 2nd brain")    >= 0) {
+        return "personal_query";
+    }
+
     // HA control verbs — clearly a command, even if the entity isn't in our
     // table.
     if (lc.indexOf("turn on")    >= 0 ||
@@ -200,6 +235,27 @@ RouteResult dispatchByIntent(const String& transcript, const String& intent,
         // inside HTTPUpdate. Discard the bool; failure is the only case.
         (void)jarvis::net::OtaService::pullRemote(url);
         return {false, String(jarvis::config::kOtaSpeakFailed)};
+    }
+    if (intent == "personal_query" || intent == "journal_note") {
+        // Both intents go through OpenClaw's `oc-personal` model alias,
+        // which runs an agent loop with the brain-mcp tools attached on
+        // lobsterboy (PLAN.md Phase 8). Lobsterboy is on Tailscale, so
+        // HOTSPOT_ONLY can't reach it — bail before burning HTTP timeout
+        // budget on a doomed call.
+        if (tier != jarvis::net::ConnectivityTier::LAN &&
+            tier != jarvis::net::ConnectivityTier::TAILSCALE) {
+            return {false, String(jarvis::config::kErrPersonalOffline)};
+        }
+        if (!jarvis::net::LLMClient::isConfigured()) {
+            return {false, String(jarvis::config::kErrPersonalOffline)};
+        }
+        const String& prompt = query.length() ? query : transcript;
+        String reply = jarvis::net::LLMClient::query(prompt,
+                                                     jarvis::config::kOcPersonalModel);
+        if (reply.length() == 0) {
+            return {false, String(jarvis::config::kErrPersonalOffline)};
+        }
+        return {true, reply};
     }
     if (intent == "local_llm" || intent == "claude") {
         const String& prompt = query.length() ? query : transcript;
