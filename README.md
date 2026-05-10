@@ -28,41 +28,43 @@ Mic (LLM Module)
   → KWS — custom wake word, always offline
   → ASR — speech to text, always offline
   → CoreS3 receives transcribed text via UART
-  → Intent Router (Qwen 0.5B on LLM Module)
-      ├── Simple/fast command → Qwen handles locally
-      ├── HA action/query    → HA REST API (WiFi)
-      ├── Complex reasoning  → OpenClaw / local LLM (WiFi/Tailscale)
-      └── Needs full AI      → Claude via OpenClaw
+  → Intent Router (keyword classifier + Qwen 0.5B as best-effort hint)
+      ├── Simple/fast command  → On-device handler (time, date, math, OTA)
+      ├── HA action/query      → HA REST API (WiFi)
+      ├── Complex reasoning    → OpenClaw / local LLM (LAN/Tailscale)
+      ├── Creative / nuanced   → Claude (via OpenClaw, or direct on hotspot)
+      ├── Personal query       → 2nd Brain RAG via oc-personal (lobsterboy)
+      └── Journal note         → 2nd Brain capture via oc-personal (lobsterboy)
   → Response text → CoreS3
-  → TTS (LLM Module) — spoken output, always offline
+  → TTS (LLM Module melotts, or cloud TTS in Phase 7) — spoken output
   → CoreS3 display — shows transcript, status, readable data
 ```
 
-**Key principle:** The LLM Module's Qwen model is a *router and formatter*, not the primary intelligence. The CoreS3 is a thin orchestrator. Intelligence scales up through the tiers as needed.
+**Key principle:** The LLM Module's Qwen model is a *best-effort hint*, not the primary classifier. The Phase 5 retro showed the on-device Qwen variant (`qwen2.5-0.5b-prefill-20e`) doesn't reliably follow instruction prompts, so a deterministic keyword classifier on the CoreS3 is the primary route, with Qwen consulted as a 4-second optional pre-step. The CoreS3 is a thin orchestrator. Intelligence scales up through the tiers as needed.
 
 -----
 
 ## Intelligence Tiers
 
-|Tier|Handler                     |Latency |Use Case                              |
-|----|----------------------------|--------|--------------------------------------|
-|1   |Qwen 0.5B (local)           |~instant|Simple commands, intent classification|
-|2   |Local LLM via OpenClaw      |1–3s LAN|Complex queries, multi-step reasoning |
-|3   |Claude via OpenClaw         |3–6s    |Anything needing full intelligence    |
-|4   |Qwen only (offline fallback)|~instant|No network available                  |
+|Tier|Handler                                |Latency |Use Case                              |
+|----|---------------------------------------|--------|--------------------------------------|
+|1   |On-device CoreS3 handler               |~instant|Time, date, math, OTA, canned replies |
+|2   |Local LLM via OpenClaw / LM Studio     |1–3s LAN|Complex queries, multi-step reasoning |
+|3   |Claude via OpenClaw or Anthropic API   |3–6s    |Creative, nuanced, full-intelligence  |
+|4   |2nd Brain RAG via `oc-personal`        |3–8s    |Personal knowledge, voice notes       |
+|5   |Qwen 0.5B (offline fallback only)      |~instant|No network available                  |
 
-OpenClaw endpoint: `https://lobsterboy.tail1c66ec.ts.net` (Tailscale Serve)  
-OpenClaw exposes an OpenAI-compatible API — CoreS3 sends standard `POST /v1/chat/completions`.
+The "OpenClaw" endpoint is now lobsterboy's `oc-personal-runner` (Phase 8) — an OpenAI-compatible front that handles `model="oc-personal"` natively (Claude + brain-mcp agent loop) and proxies every other model name straight through to LM Studio at `192.168.1.108:1234`. CoreS3 sends standard `POST /v1/chat/completions`; the runner picks the path based on the `model` field.
 
 -----
 
 ## Backends
 
 - **HA REST API** — light control, lock/unlock, sensor queries, automations
-- **OpenClaw / Local LLM** — complex questions, memory, multi-step tasks
-- **Claude API** — via OpenClaw as proxy
-- **Lightweight HTTP APIs** — weather, time, etc.
-- **On-device** — timers, reminders, canned responses
+- **OpenClaw / Local LLM** — complex questions, multi-step tasks. Currently `google/gemma-4-e4b` via LM Studio.
+- **Claude API** — via OpenClaw as proxy on LAN/Tailscale, or direct to `api.anthropic.com` on phone hotspot
+- **2nd Brain (`oc-personal`)** — personal knowledge wiki at `jarod7736/2ndBrain`. Read via `brain_search`, write via `brain_capture`. Runs as an MCP server (`tools/brain-mcp/`) on lobsterboy, fronted by an agent runner (`tools/oc-personal-runner/`) that drives Claude with the MCP tools attached.
+- **On-device** — timers, time/date, math, OTA, canned responses
 
 -----
 
@@ -71,14 +73,16 @@ OpenClaw exposes an OpenAI-compatible API — CoreS3 sends standard `POST /v1/ch
 WiFiMulti with graceful degradation:
 
 ```
-Home WiFi + LAN          → Full capability, lowest latency
+Home WiFi + LAN           → Full capability, lowest latency
 Phone hotspot + Tailscale → Full capability, cellular latency
-Phone hotspot only        → Claude API direct, no local LLM
-No network               → Qwen local only (Tier 4)
+Phone hotspot only        → Claude API direct (no local LLM, no 2nd Brain)
+No network                → Qwen local only (offline tier)
 ```
 
+`personal_query` and `journal_note` require LAN or Tailscale because the 2nd Brain MCP server lives on lobsterboy. On HOTSPOT_ONLY / OFFLINE the firmware short-circuits to `kErrPersonalOffline` ("I can't reach my notes right now.") rather than burning HTTP timeout budget on a doomed call.
+
 Credentials stored in ESP32 NVS (non-volatile storage), not hardcoded.  
-HA long-lived token also stored in NVS.
+HA long-lived token, OpenClaw URL, and TTS API key all live in NVS.
 
 -----
 
@@ -94,85 +98,109 @@ HA long-lived token also stored in NVS.
 
 ## Project Plan
 
-### Phase 1 — Hardware Validation
+Detailed per-phase design, retros, and validation gates live in [`PLAN.md`](PLAN.md). The summary below tracks high-level state.
 
-- [ ] Receive and unbox CoreS3 + LLM Module
-- [ ] Stack modules, confirm M5Bus connection
-- [ ] Flash basic M5Module-LLM Arduino example
-- [ ] Confirm KWS → ASR → TTS pipeline works end to end
-- [ ] Verify UART JSON communication from CoreS3
+### Phase 1 — Hardware Validation ✅
 
-### Phase 2 — Wake Word & Speech Pipeline
+- [x] Receive and unbox CoreS3 + LLM Module
+- [x] Stack modules, confirm M5Bus connection
+- [x] Flash basic M5Module-LLM Arduino example
+- [x] Confirm KWS → ASR → TTS pipeline works end to end (the bundled `VoiceAssistant` example was the wrong abstraction for FW v1.6 — see Phase 1 retro; voice-loop wiring built directly in Phase 2)
+- [x] Verify UART JSON communication from CoreS3
 
-- [ ] Train custom wake word via M5Stack KWS toolchain
-- [ ] Flash custom KWS model to LLM Module
-- [ ] Tune ASR sensitivity for target environment
-- [ ] Display ASR transcript on CoreS3 screen
-- [ ] Add status indicators (listening/thinking/speaking states)
-- [x] Add battery level and charging-state indicator to the display (read AXP2101 via `M5.Power`; refresh on a timer; low-battery warning threshold)
+### Phase 2 — Wake Word & Speech Pipeline ✅
 
-### Phase 3 — WiFi & Basic Connectivity
+- [ ] Train custom JARVIS wake word (deferred — see config.h note; reverted to bundled "HELLO" pending KWS-setup debug)
+- [x] Flash KWS model to LLM Module (bundled HELLO works; arbitrary all-caps words supported by sherpa-onnx)
+- [x] Tune ASR sensitivity for target environment
+- [x] Display ASR transcript on CoreS3 screen
+- [x] Add status indicators (listening/thinking/speaking states)
+- [x] Add battery level and charging-state indicator to the display
 
-- [ ] Implement WiFiMulti with home SSID + phone hotspot fallback
-- [ ] Store credentials in NVS
-- [ ] Add connectivity status to display
-- [ ] Test Tailscale reachability to OpenClaw from phone hotspot
+### Phase 3 — WiFi & Basic Connectivity ✅
 
-### Phase 4 — HA Integration
+- [x] Implement WiFiMulti with home SSID + phone hotspot fallback (with true slot-order priority)
+- [x] Store credentials in NVS (with USB-Serial provisioning fallback + captive-portal config UI)
+- [x] Add connectivity status to display
+- [x] Tier detection: LAN / TAILSCALE / HOTSPOT_ONLY / OFFLINE
 
-- [ ] Store HA long-lived token in NVS
-- [ ] Implement HA REST API client on CoreS3
-- [ ] Hardcode 5–10 voice commands → HA actions (lights, locks, etc.)
-- [ ] Implement HA state queries ("is the garage door open?")
-- [ ] Test end-to-end: wake word → command → HA action → TTS confirmation
+### Phase 4 — HA Integration ✅
 
-### Phase 5 — Intent Routing via Qwen
+- [x] Store HA long-lived token in NVS
+- [x] Implement HA REST API client on CoreS3
+- [x] Hardcode voice commands → HA actions (lights, locks, etc.)
+- [x] Implement HA state queries ("is the garage door open?")
+- [x] Test end-to-end: wake word → command → HA action → TTS confirmation (validated, ~3s round-trip)
 
-- [ ] Design intent classification prompt for Qwen 0.5B
-- [ ] Implement routing logic on CoreS3 (parse Qwen response, dispatch to backend)
-- [ ] Test routing accuracy across command categories
-- [ ] Add fallback handling for low-confidence classifications
+### Phase 5 — Intent Routing ✅
 
-### Phase 6 — OpenClaw / Local LLM Integration
+- [x] Design intent classification prompt for Qwen 0.5B
+- [x] Implement routing logic on CoreS3 (parse Qwen response, dispatch to backend)
+- [x] Build keyword classifier as primary path (Qwen 0.5B is unreliable as classifier — see Phase 5 retro)
+- [x] Add fallback handling for low-confidence classifications
 
-- [ ] Implement OpenAI-compatible HTTP client on CoreS3
-- [ ] Route complex queries to OpenClaw endpoint
-- [ ] Handle streaming vs. non-streaming responses
-- [ ] Test latency and tune timeout thresholds
+### Phase 6 — OpenClaw / Local LLM Integration ✅
 
-### Phase 7 — Polish & Reliability
+- [x] Implement OpenAI-compatible HTTP client on CoreS3 (`net/LLMClient.cpp`)
+- [x] Route complex queries to OpenClaw endpoint (gemma-4-e4b via LM Studio)
+- [x] Direct Anthropic API fallback for the `claude` intent on HOTSPOT_ONLY tier
+- [ ] Streaming responses (deferred — Phase 7 enhancement)
+
+### Phase 7 — Polish & Reliability (in progress)
 
 - [x] SD card logging (query/response pairs with timestamps)
 - [ ] Cloud TTS routing with custom voice (OpenAI / ElevenLabs), melotts fallback for offline tier
-- [ ] MQTT integration alongside HA REST
-- [ ] OTA firmware update support
+- [x] MQTT integration alongside HA REST
+- [x] OTA firmware update support (LAN ArduinoOTA + remote `update_fw` voice intent)
 - [ ] Graceful degradation testing across all connectivity tiers
 - [ ] Enclosure / mounting solution
+
+### Phase 8 — 2nd Brain Integration ✅
+
+- [x] Spec phase 8 in PLAN.md (PR #24)
+- [x] Firmware: `personal_query` and `journal_note` intents + `kOcPersonalModel` + `kErrPersonalOffline` (PR #25)
+- [x] `tools/brain-mcp/` Python MCP server with `brain_search` / `brain_capture` / `brain_lint` / `brain_ingest_status` (PR #26)
+- [x] `tools/oc-personal-runner/` FastAPI service: agent loop with Claude + brain-mcp tools, proxies non-personal models to LM Studio (PR #27)
+- [ ] Deploy on lobsterboy and validate end-to-end against the live vault
+- [ ] Repoint Jarvis NVS `oc_host` at the runner
 
 -----
 
 ## Key Constraints & Known Limitations
 
-- **Qwen 0.5B** will hallucinate on complex or ambiguous queries — treat it as a router only
-- **ASR accuracy** degrades in noisy environments (shop, kitchen background noise)
-- **API latency** for OpenClaw/Claude calls will be 1–6s — need audio/visual feedback during wait
-- **LLM Module models** are AXERA-proprietary format — cannot load arbitrary HuggingFace models without conversion
-- **CoreS3 memory** is sufficient for orchestration but not heavy local inference
+- **Qwen 0.5B** on the LLM Module is the `qwen2.5-0.5b-prefill-20e` variant — it doesn't reliably follow instruction prompts. Used as a 4-second best-effort hint; the deterministic keyword classifier is the primary route. Phase 5 retro has the gory details.
+- **ASR accuracy** degrades in noisy environments. ASR also drops the front of fast speech that follows immediately after the wake word — KWS+ASR start latency, see Phase 2 retro.
+- **API latency**: HA round-trip ~3 s; OpenClaw/Claude ~1–6 s; `oc-personal` agent loop up to ~10 s when Claude needs multiple `brain_search` calls (capped at 4 inner turns).
+- **LLM Module models** are AXERA-proprietary format — cannot load arbitrary HuggingFace models without conversion.
+- **CoreS3 memory** is sufficient for orchestration but not heavy local inference.
+- **2nd Brain ingestion** is still LLM-driven and runs from the laptop's `/brain-ingest` Claude Code skill, not from the MCP server. `brain_capture` (write voice notes into `raw/`) works from the device today; agentic processing of those notes happens during a manual ingest pass.
 
 -----
 
 ## Reference Links
 
+External:
+
 - [M5Stack LLM Module Docs](https://docs.m5stack.com/en/module/Module-llm)
 - [M5Module-LLM Arduino API](https://docs.m5stack.com/en/stackflow/module_llm/arduino_api)
 - [LLM Module JSON API](https://docs.m5stack.com/en/stackflow/module_llm/api)
 - [CoreS3 Docs](https://docs.m5stack.com/en/core/CoreS3)
-- OpenClaw endpoint: `https://lobsterboy.tail1c66ec.ts.net`
+- OpenClaw endpoint: `https://lobsterboy.tail1c66ec.ts.net` (Phase 8 oc-personal-runner)
 - HA Nabu Casa: `pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa`
+
+In-tree:
+
+- [`PLAN.md`](PLAN.md) — phase-by-phase design, retros, NVS schema, error taxonomy, known pitfalls
+- [`CLAUDE.md`](CLAUDE.md) — invariants for AI/agent contributors
+- [`docs/reference/`](docs/reference/) — version-pinned local copies of M5Stack / AX630C reference material
+- [`tools/brain-mcp/`](tools/brain-mcp/) — Python MCP server exposing the 2nd Brain wiki to OpenClaw
+- [`tools/oc-personal-runner/`](tools/oc-personal-runner/) — FastAPI front for the `oc-personal` model alias
+- [`tools/provision-wifi.py`](tools/provision-wifi.py) — first-run NVS provisioning over USB Serial
 
 -----
 
 ## Status
 
-**Current state:** Pre-hardware. Planning complete. Hardware en route.  
-**Next action:** Phase 1 — hardware validation once CoreS3 + LLM Module arrive.
+**Current state:** Phases 1–6 hardware-validated end-to-end. Phase 8 (2nd Brain integration) landed across PRs #24/#25/#26/#27 and is awaiting deploy on lobsterboy. Phase 7 polish (cloud TTS, degradation matrix, enclosure) is the remaining open thread.
+
+**Next action:** Deploy `tools/oc-personal-runner/` on lobsterboy via its `deploy.sh`, repoint Jarvis NVS `oc_host` at the runner, validate `"what do I know about kettlebells"` and `"note that I called the plumber"` end-to-end on hardware.
