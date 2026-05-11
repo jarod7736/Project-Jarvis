@@ -161,15 +161,29 @@ cmd_install() {
         local svc_src="${PKG_DIR}/systemd/oc-personal.service"
         local svc_tmp
         svc_tmp="$(mktemp)"
-        # Substitute User=, paths, and LM Studio URL so the unit reflects this host.
-        sed -e "s|^User=.*|User=${RUN_USER}|" \
-            -e "s|^WorkingDirectory=.*|WorkingDirectory=${PKG_DIR}|" \
+        # The checked-in unit is a template with __RUN_USER__ / __PROJECT_ROOT__
+        # placeholders (see tools/oc-personal-runner/systemd/oc-personal.service).
+        # Replace those first, then key-anchored substitutions handle the
+        # configurable knobs.
+        sed -e "s|__RUN_USER__|${RUN_USER}|g" \
+            -e "s|__PROJECT_ROOT__|${PROJECT_ROOT}|g" \
             -e "s|^Environment=OC_LMSTUDIO_URL=.*|Environment=OC_LMSTUDIO_URL=${LMSTUDIO_URL}|" \
             -e "s|^Environment=OC_LISTEN_PORT=.*|Environment=OC_LISTEN_PORT=${LISTEN_PORT}|" \
-            -e "s|^Environment=OC_BRAIN_MCP_COMMAND=.*|Environment=OC_BRAIN_MCP_COMMAND=${BRAIN_MCP_DIR}/.venv/bin/python|" \
             -e "s|^EnvironmentFile=.*|EnvironmentFile=-${SECRETS_FILE}|" \
-            -e "s|^ExecStart=.*|ExecStart=${VENV_DIR}/bin/python -m oc_personal.server|" \
             "${svc_src}" > "${svc_tmp}"
+
+        # Refuse to install if any sentinel survived on a directive line. A
+        # leftover placeholder means we'd hand systemd a unit pointing at a
+        # path that doesn't exist; the service would crash-loop opaquely.
+        # Skip comments (the documentation block above intentionally mentions
+        # __FOO__ as a literal example).
+        if grep -vE '^\s*#' "${svc_tmp}" | grep -qE '__[A-Z_]+__'; then
+            fail "Unsubstituted placeholders in rendered unit — aborting install."
+            info "Offending lines:"
+            grep -nE '__[A-Z_]+__' "${svc_tmp}" | grep -vE ':\s*#' | sed 's/^/    /'
+            rm -f "${svc_tmp}"
+            exit 1
+        fi
 
         sudo install -m 0644 "${svc_tmp}" "${SYSTEMD_UNIT_DIR}/oc-personal.service"
         rm -f "${svc_tmp}"

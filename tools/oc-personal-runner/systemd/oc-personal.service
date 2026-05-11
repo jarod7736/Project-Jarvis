@@ -8,9 +8,13 @@ After=brain-sync.service
 
 [Service]
 Type=simple
-User=lobsterboy
-WorkingDirectory=/home/lobsterboy/project-jarvis/tools/oc-personal-runner
-# Override these in a drop-in (/etc/systemd/system/oc-personal.service.d/override.conf)
+# __RUN_USER__ and __PROJECT_ROOT__ are sentinel placeholders that deploy.sh
+# substitutes at install time (see tools/oc-personal-runner/deploy.sh:cmd_install).
+# This file is a template, not a directly-installable unit — the post-sed
+# validator in deploy.sh refuses to install if any __FOO__ token survives.
+User=__RUN_USER__
+WorkingDirectory=__PROJECT_ROOT__/tools/oc-personal-runner
+# Override the rest in a drop-in (/etc/systemd/system/oc-personal.service.d/override.conf)
 # rather than editing this file. ANTHROPIC_API_KEY especially should not live
 # in the unit text — use EnvironmentFile= pointing at a 0600-permissioned env file.
 Environment=OC_LISTEN_HOST=0.0.0.0
@@ -21,7 +25,7 @@ Environment=OC_ANTHROPIC_MODEL=claude-sonnet-4-6
 Environment=OC_MAX_TURNS=4
 Environment=OC_MAX_OUTPUT_TOKENS=200
 Environment=BRAIN_VAULT_PATH=/srv/2ndbrain
-Environment=OC_BRAIN_MCP_COMMAND=/home/lobsterboy/project-jarvis/tools/brain-mcp/.venv/bin/python
+Environment=OC_BRAIN_MCP_COMMAND=__PROJECT_ROOT__/tools/brain-mcp/.venv/bin/python
 # Quoted so systemd does not split on the space inside the value. Without
 # quotes, `Environment=OC_BRAIN_MCP_ARGS=-m brain_mcp.server` is parsed as
 # two pairs — OC_BRAIN_MCP_ARGS=-m plus an orphan `brain_mcp.server` — and
@@ -29,7 +33,7 @@ Environment=OC_BRAIN_MCP_COMMAND=/home/lobsterboy/project-jarvis/tools/brain-mcp
 # with "Argument expected for the -m option" on every start.
 Environment="OC_BRAIN_MCP_ARGS=-m brain_mcp.server"
 EnvironmentFile=-/etc/oc-personal/secrets.env
-ExecStart=/home/lobsterboy/project-jarvis/tools/oc-personal-runner/.venv/bin/python -m oc_personal.server
+ExecStart=__PROJECT_ROOT__/tools/oc-personal-runner/.venv/bin/python -m oc_personal.server
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal

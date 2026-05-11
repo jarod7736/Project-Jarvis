@@ -192,11 +192,26 @@ cmd_install() {
         local svc_tmp tim_tmp
         svc_tmp="$(mktemp)"
         tim_tmp="$(mktemp)"
-        # Substitute User= and BRAIN_VAULT_PATH so the unit reflects this host.
-        sed -e "s|^User=.*|User=${RUN_USER}|" \
+        # The checked-in unit is a template — __RUN_USER__ is a sentinel
+        # placeholder that this sed pass replaces. BRAIN_VAULT_PATH stays as
+        # a key-anchored substitution (it has a real default that works in
+        # the common case but should still reflect this host).
+        sed -e "s|__RUN_USER__|${RUN_USER}|g" \
             -e "s|^Environment=BRAIN_VAULT_PATH=.*|Environment=BRAIN_VAULT_PATH=${VAULT_PATH}|" \
             "${svc_src}" > "${svc_tmp}"
         cp "${tim_src}" "${tim_tmp}"
+
+        # Refuse to install if any sentinel placeholder survived on a
+        # directive line — that would leave the unit pointing at literal
+        # __RUN_USER__ and crash-loop opaquely. Skip comments (the doc
+        # block above intentionally mentions __FOO__ as a literal example).
+        if grep -vE '^\s*#' "${svc_tmp}" | grep -qE '__[A-Z_]+__'; then
+            fail "Unsubstituted placeholders in rendered unit — aborting install."
+            info "Offending lines:"
+            grep -nE '__[A-Z_]+__' "${svc_tmp}" | grep -vE ':\s*#' | sed 's/^/    /'
+            rm -f "${svc_tmp}" "${tim_tmp}"
+            exit 1
+        fi
 
         sudo install -m 0644 "${svc_tmp}" "${SYSTEMD_UNIT_DIR}/brain-sync.service"
         sudo install -m 0644 "${tim_tmp}" "${SYSTEMD_UNIT_DIR}/brain-sync.timer"
