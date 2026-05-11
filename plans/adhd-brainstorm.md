@@ -163,7 +163,7 @@ You named this directly: work calendar / email / Teams are locked down and can't
 
 4. **OWA at home on a personal browser.** Many tenants allow webmail from any device because the corporate policy is "no SYNCING to MDM-unmanaged devices," not "no LOOKING from any browser." Open it once at start of day, dictate the day's meetings to Jarvis. ~60 seconds.
 
-5. **`.ics` publish from Outlook (cheapest real bridge if your tenant allows it).** Outlook has a "Publish calendar" feature that emits a private `.ics` URL anyone with the URL can subscribe to. Many tenants block this, but some allow it for read-only sharing with family. If yours allows it: lobsterboy subscribes directly to the `.ics` and feeds it into the same Calendar pipeline as your personal calendar. No shadow, no dump, no photos. Worth a 5-minute check — it might just work and obviate most of the other bridges.
+5. ~~**`.ics` publish from Outlook.**~~ **Confirmed unavailable (2026-05-11):** your tenant blocks all forms of external calendar sharing, including private `.ics` publishing. This was the cheapest bridge and it's closed. Falling through to voice-dump and OCR paths below.
 
 6. **Microsoft Authenticator next-meeting widget.** Some tenants surface "your next meeting" through the Authenticator app you're already using for MFA, without granting personal-device email sync. Pure read-only glimpse, but enough for "do I have a meeting in the next 30 minutes." Tenant-config dependent.
 
@@ -175,13 +175,11 @@ You mentioned the family Skylight calendar that aggregates everyone's calendars.
 
 - **As a data source for lobsterboy:** Skylight has no public API I'm aware of. It pulls calendars *in* (Google, iCloud, Outlook.com personal, `.ics` feeds, Cozi); it doesn't push *out* to third parties. So lobsterboy can't query Skylight directly. The good news: anything Skylight is pulling is also pullable by lobsterboy via the same sources. Whatever your family setup feeds Skylight, the agent can feed off the same upstream.
 - **As a reverse signal:** because Skylight is a *display* the family sees, it's already doing some of what we want — your spouse/kids walking past the kitchen see the day. That doesn't replace Jarvis's TTS push but it does mean some calendar drift is already mitigated for shared events.
-- **Worth checking:** is your *work* calendar already showing up on the family Skylight via a published `.ics`? If yes, you've already crossed the air gap — lobsterboy can subscribe to the same feed (see bridge #5). If no, it almost certainly means your tenant blocks `.ics` publishing, which closes that option.
+- **Confirmed closed:** tenant blocks all external sharing, so the work calendar can't reach Skylight or lobsterboy via `.ics`. Eliminates this as a back-door bridge.
 
 ### What I'd actually pick
 
-**Option 5 (`.ics` publish) is free if it works.** Try it first — five minutes in Outlook settings. If your tenant allows it, the work-walled-garden problem ~mostly evaporates.
-
-**Otherwise: Option 1 (EOD voice dump) + Option 2 (shadow calendar) as the unified path.** Reuses everything you already have. Add one new intent (`eod_dump`) that captures tomorrow's items into a fresh raw note. Overnight cron on lobsterboy runs the agent over that note: parses out meeting-shaped lines and adds them to your shadow Google/Apple Calendar via Calendar MCP; parses follow-ups into project pages; parses blockers into a "stuck on" wiki section. Morning brief now has work context — not because we cracked the tenant, but because *you* told the system the night before.
+**With Option 5 confirmed unavailable, the unified path is Option 1 (EOD voice dump) + Option 2 (shadow calendar).** Reuses everything you already have. Add one new intent (`eod_dump`) that captures tomorrow's items into a fresh raw note. Overnight cron on lobsterboy runs the agent over that note: parses out meeting-shaped lines and adds them to your shadow Google/Apple Calendar via Calendar MCP; parses follow-ups into project pages; parses blockers into a "stuck on" wiki section. Morning brief now has work context — not because we cracked the tenant, but because *you* told the system the night before.
 
 Because Jarvis travels with you, the dump pattern is far cheaper than EOD-only would be on a static device — you also get mid-meeting and post-meeting captures into the same raw-note inbox, and the overnight pass cleans them all up together.
 
@@ -191,11 +189,10 @@ If the dump pattern proves itself, **Option 3 (photo OCR)** is a nice backup for
 
 ### What this changes upstream
 
-Calendar drift section above still applies, but to your *personal* calendar only — medical, family, errands, vendor visits. Work meetings get to the shadow calendar via the `.ics` (if available), or the dump, or the photo path — and from there participate in pre-event TTS exactly like any other calendar item.
+Calendar drift section above still applies, but to your *personal* calendar only — medical, family, errands, vendor visits. Work meetings get to the shadow calendar via the dump or the photo path — and from there participate in pre-event TTS exactly like any other calendar item.
 
 ### Open questions for this section
 
-- **Can your work Outlook publish a `.ics` URL?** Five-minute check. Outlook on the web → Settings → Calendar → Shared calendars → Publish a calendar → see if the option is greyed out. If it works: that's the bridge.
 - Workplace audio-recording policy is worth a brief gut-check since Jarvis travels with you (some corp offices and client sites don't allow always-on mics, even wake-word ones). Power-on-the-go is fine — Jarvis has a battery; tether to USB-C when at the desk, run on battery when out.
 
 ## Concrete options menu
@@ -234,15 +231,13 @@ Numbered to make picking easy. Pick 1-3 to talk about.
 
 A 3-sprint sequence, not a 6-month thing. Each sprint ends with something usable.
 
-**Step zero (today, 5 minutes, zero code):** check whether your work Outlook can publish a private `.ics` URL (settings → calendar → shared calendars → publish). If yes, that bridge is free and the work-walled-off problem mostly evaporates. If no, you fall back to the dump pattern (#11) in sprint 2.
-
 **Sprint 0 — Extend brain-mcp for project tracking (#13, half-day, do this before sprint 1).** Add the `type: project` + `status` + `next_action` + `priority` frontmatter convention to your 2ndBrain vault; ship two new MCP tools (`brain_set_next_action`, `brain_list_projects`); make every brain-mcp write auto-bump `updated:`. Run a one-time batch edit over your existing project-shaped pages to add the new fields. Sprint 1 onward depends on `brain_list_projects` returning real data.
 
 **Sprint 1 — Foundation (1 week).** #1 (reverse channel: MQTT publish from lobsterboy → Jarvis speaks + Pushover to iPhone) + #14 (priority router) + #4 (personal GCal MCP wired into oc-personal-runner) + #5 (personal Gmail MCP wired). Auth is already done on #4 and #5, so the lift is mostly system-prompt + config. Pair the reverse channel with the priority router from day one so you don't ship a too-chatty firehose. After this sprint Jarvis can talk first (with priority awareness), knows your personal calendar, and can read/draft personal email. Step-function ADHD win.
 
 **Sprint 2 — Daily anchor (1 week).** #2 (morning brief, scheduled 8 AM, picks ONE focus) + #3 (project next-action: voice ask + voice set + frontmatter maintenance) + #10 (stale resurface, folded into the morning brief). End of this sprint: your day starts with a one-sentence focus, you can ask "what's next on the boat" anytime, and stalled projects can't hide. This is where the ADHD impact gets visceral.
 
-**Sprint 3 — Work bridge (half-week).** Either (a) wire up the `.ics` feed from step zero into the morning brief, or (b) ship #11 (EOD voice dump → overnight structuring into shadow calendar via the personal GCal MCP). After this sprint, your work day participates in tomorrow's brief — either because Outlook was kind enough to give you an `.ics`, or because *you* told the system the night before.
+**Sprint 3 — Work bridge (half-week).** Ship #11 (EOD voice dump → overnight structuring into shadow calendar via the personal GCal MCP). After this sprint, your work day participates in tomorrow's brief because *you* told the system the night before. #12 (photo OCR of the Outlook week-view) is the backup capture path for days you skip the dump.
 
 **Later (un-sprinted):** #7 (call script tool) when you next dread a call; #6 (web-form filler) and #8 (autonomous calls) only after #7 proves itself. #9 (Friday digest) is a nice-to-have whenever.
 
@@ -254,9 +249,9 @@ A 3-sprint sequence, not a 6-month thing. Each sprint ends with something usable
 - Reminders OK with priority tiers. → Three-tier system designed in "Notification priority tiers" above.
 - Existing Obsidian structure lives in the 2ndBrain repo. → Sprint 0 reduces to a gap-analysis pass against what's already there, not a from-scratch scaffold; see "Wiki organization" section.
 - Personal Gmail/GDrive/GCal MCPs already authenticated. Work is Outlook (walled). → Options #4 and #5 are ~1 hour each; work bridge needs sprint 3.
+- Work tenant blocks all external calendar sharing (verified 2026-05-11) — no `.ics` publish, no Skylight pass-through. → Sprint 3 collapses to the voice-dump path (#11) with photo OCR (#12) as backup; no "is the bridge free?" check needed.
 
 **Still open:**
-- **Can your work Outlook publish a `.ics` URL?** Five-minute check on Outlook web settings. Determines sprint 3 path.
 - **How chatty is too chatty?** The priority tiers give us the dial, but you'll have to tune medium-vs-low for yourself over the first week or two of use. Plan: start conservative (most things → low), promote to medium when you wish you'd been told.
 - **Bland.ai appetite.** Defer until #7 has run a few cycles. Names the question for later.
 - **Privacy ack.** Wiring Calendar/Gmail MCPs into oc-personal-runner means Claude (via Anthropic API) sees more of your data. You already accepted this for the wiki; naming it again because the volume goes up significantly with email.
