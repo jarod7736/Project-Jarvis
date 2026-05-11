@@ -21,6 +21,11 @@ PERSONAL_MODEL = os.environ.get("OC_PERSONAL_MODEL", "oc-personal")
 # Where Jarvis used to point oc_host directly. Anything that isn't
 # PERSONAL_MODEL gets forwarded here unchanged.
 LMSTUDIO_URL = os.environ.get("OC_LMSTUDIO_URL", "http://192.168.1.108:1234")
+# Optional Bearer token forwarded as Authorization: Bearer <token>. LM Studio
+# added optional server-side token auth in a recent release; if your LM Studio
+# requires one, set LM_STUDIO_TOKEN in the EnvironmentFile. Empty string means
+# do not send an Authorization header.
+LMSTUDIO_TOKEN = os.environ.get("LM_STUDIO_TOKEN", "")
 
 # ── Anthropic side ──────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
