@@ -5,10 +5,14 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# Override these in a drop-in (/etc/systemd/system/brain-sync.service.d/override.conf)
-# rather than editing this file. User must own the vault working tree and
-# have an SSH agent or deploy key configured for the remote.
-User=lobsterboy
+# __RUN_USER__ is a sentinel placeholder that deploy.sh substitutes at install
+# time (see tools/brain-mcp/deploy.sh:cmd_install). This file is a template —
+# the post-sed validator in deploy.sh refuses to install if the placeholder
+# survives. Override other knobs via a drop-in
+# (/etc/systemd/system/brain-sync.service.d/override.conf) rather than editing
+# this file. The chosen user must own the vault working tree and have an
+# SSH agent or deploy key configured for the remote.
+User=__RUN_USER__
 Environment=BRAIN_VAULT_PATH=/srv/2ndbrain
 ExecStart=/usr/bin/git -C ${BRAIN_VAULT_PATH} pull --ff-only origin main
 # Pull failures (network glitch, conflict, auth) should not block other
