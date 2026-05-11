@@ -20,11 +20,15 @@ log = logging.getLogger(__name__)
 
 class LMStudioProxy:
     def __init__(self) -> None:
-        # Single shared client; LM Studio doesn't expect auth and isn't
-        # connection-rate-limited.
+        # Single shared client. LM Studio supports optional server-side token
+        # auth; if config.LMSTUDIO_TOKEN is set we forward it as a Bearer.
+        headers: dict[str, str] = {}
+        if config.LMSTUDIO_TOKEN:
+            headers["Authorization"] = f"Bearer {config.LMSTUDIO_TOKEN}"
         self._client = httpx.AsyncClient(
             base_url=config.LMSTUDIO_URL,
             timeout=httpx.Timeout(connect=3.0, read=30.0, write=30.0, pool=3.0),
+            headers=headers,
         )
 
     async def aclose(self) -> None:
