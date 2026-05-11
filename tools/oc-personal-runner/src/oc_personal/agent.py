@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from typing import Any
 
 from anthropic import AsyncAnthropic
@@ -43,52 +44,47 @@ class BrainAgent:
         self._anthropic = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
         self._session: ClientSession | None = None
         self._tools_anthropic: list[dict[str, Any]] = []
-        self._mcp_ctx: Any = None
-        self._client_ctx: Any = None
         self._lock = asyncio.Lock()
 
-    async def start(self) -> None:
-        """Spawn brain-mcp and cache its tool definitions."""
+    @asynccontextmanager
+    async def lifecycle(self):
+        # mcp's stdio_client wraps an anyio TaskGroup whose cancel scope is
+        # bound to the entering task; the nested `async with` blocks must
+        # remain in the live call frame of the FastAPI lifespan task.
+        # Manual __aenter__/__aexit__ across separate methods produced
+        # "Attempted to exit cancel scope in a different task" on startup.
+        import shlex
+        _wrapped = "exec {cmd} {args} 2>>/tmp/brain-mcp.err".format(
+            cmd=shlex.quote(config.BRAIN_MCP_COMMAND),
+            args=" ".join(shlex.quote(a) for a in config.BRAIN_MCP_ARGS),
+        )
         params = StdioServerParameters(
-            command=config.BRAIN_MCP_COMMAND,
-            args=config.BRAIN_MCP_ARGS,
+            command="/bin/sh",
+            args=["-c", _wrapped],
             env={"BRAIN_VAULT_PATH": config.BRAIN_VAULT_PATH},
         )
-        # Hold the context managers open for the lifetime of the agent;
-        # close them in stop().
-        self._client_ctx = stdio_client(params)
-        read, write = await self._client_ctx.__aenter__()
-        self._mcp_ctx = ClientSession(read, write)
-        self._session = await self._mcp_ctx.__aenter__()
-        await self._session.initialize()
-
-        tools_resp = await self._session.list_tools()
-        self._tools_anthropic = [
-            {
-                "name": t.name,
-                "description": t.description or "",
-                "input_schema": t.inputSchema,
-            }
-            for t in tools_resp.tools
-        ]
-        log.info(
-            "brain-mcp session initialized with %d tools: %s",
-            len(self._tools_anthropic),
-            [t["name"] for t in self._tools_anthropic],
-        )
-
-    async def stop(self) -> None:
-        # Best-effort close. Order matters — session before stdio transport.
-        if self._mcp_ctx is not None:
-            try:
-                await self._mcp_ctx.__aexit__(None, None, None)
-            except Exception:
-                log.exception("error closing MCP session")
-        if self._client_ctx is not None:
-            try:
-                await self._client_ctx.__aexit__(None, None, None)
-            except Exception:
-                log.exception("error closing MCP transport")
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools_resp = await session.list_tools()
+                self._session = session
+                self._tools_anthropic = [
+                    {
+                        "name": t.name,
+                        "description": t.description or "",
+                        "input_schema": t.inputSchema,
+                    }
+                    for t in tools_resp.tools
+                ]
+                log.info(
+                    "brain-mcp session initialized with %d tools: %s",
+                    len(self._tools_anthropic),
+                    [t["name"] for t in self._tools_anthropic],
+                )
+                try:
+                    yield
+                finally:
+                    self._session = None
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Call an MCP tool and flatten the result to a single string."""

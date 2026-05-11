@@ -60,22 +60,20 @@ async def lifespan(_app: FastAPI):
         log.error("ANTHROPIC_API_KEY is not set; oc-personal calls will fail.")
 
     agent = BrainAgent()
-    await agent.start()
     proxy = LMStudioProxy()
-    log.info(
-        "ready: listening on %s:%d, personal_model=%s, lmstudio=%s",
-        config.LISTEN_HOST,
-        config.LISTEN_PORT,
-        config.PERSONAL_MODEL,
-        config.LMSTUDIO_URL,
-    )
-    try:
-        yield
-    finally:
-        if agent is not None:
-            await agent.stop()
-        if proxy is not None:
-            await proxy.aclose()
+    async with agent.lifecycle():
+        log.info(
+            "ready: listening on %s:%d, personal_model=%s, lmstudio=%s",
+            config.LISTEN_HOST,
+            config.LISTEN_PORT,
+            config.PERSONAL_MODEL,
+            config.LMSTUDIO_URL,
+        )
+        try:
+            yield
+        finally:
+            if proxy is not None:
+                await proxy.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -108,10 +106,14 @@ async def chat_completions(request: Request) -> JSONResponse:
 
 
 def main() -> None:
+    # Force stock asyncio. uvloop's subprocess transport closes the stdin
+    # WriteUnixTransport before mcp's stdio_client task group can write
+    # to it, producing BrokenResourceError on session.initialize().
     uvicorn.run(
         app,
         host=config.LISTEN_HOST,
         port=config.LISTEN_PORT,
+        loop="asyncio",
         log_level=os.environ.get("OC_LOG_LEVEL", "info"),
     )
 
