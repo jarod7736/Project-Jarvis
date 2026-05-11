@@ -136,6 +136,51 @@ const char* classifyByKeyword(const String& lc) {
         return "personal_query";
     }
 
+    // Personal-agent queries that hit non-wiki MCPs on the server side
+    // (calendar, email, project tracking). These all dispatch the same
+    // way wiki reads do — through kOcPersonalModel — and the agent's
+    // system prompt picks gcal_*/gmail_*/brain_* tools based on the
+    // prompt content. Anchored on "my <noun>" or specific verb phrases
+    // so generic queries like "what's the weather" do not get pulled in.
+    if (lc.indexOf("my calendar")      >= 0 ||
+        lc.indexOf("my schedule")      >= 0 ||
+        lc.indexOf("any meetings")     >= 0 ||
+        lc.indexOf("any appointments") >= 0 ||
+        lc.indexOf("schedule today")   >= 0 ||
+        lc.indexOf("schedule tomorrow") >= 0 ||
+        lc.indexOf("on my agenda")     >= 0 ||
+        lc.indexOf("add to my calendar") >= 0 ||
+        lc.indexOf("put on my calendar") >= 0 ||
+        lc.indexOf("schedule a")       >= 0 ||
+        // Email read paths.
+        lc.indexOf("my inbox")         >= 0 ||
+        lc.indexOf("my email")         >= 0 ||
+        lc.indexOf("my unread")        >= 0 ||
+        lc.indexOf("any new email")    >= 0 ||
+        lc.indexOf("any email from")   >= 0 ||
+        lc.indexOf("any messages")     >= 0 ||
+        lc.indexOf("any new messages") >= 0 ||
+        // Email write paths — these compose a draft (never sent).
+        lc.indexOf("draft an email")   >= 0 ||
+        lc.indexOf("draft a reply")    >= 0 ||
+        lc.indexOf("draft an reply")   >= 0 ||
+        lc.indexOf("compose an email") >= 0 ||
+        lc.indexOf("compose a reply")  >= 0 ||
+        lc.indexOf("write an email")   >= 0 ||
+        lc.indexOf("reply to")         >= 0 ||
+        // Project tracking — read + write a project page's next_action.
+        lc.indexOf("what am i working on") >= 0 ||
+        lc.indexOf("what's active")    >= 0 ||
+        lc.indexOf("what is active")   >= 0 ||
+        lc.indexOf("what's next on")   >= 0 ||
+        lc.indexOf("what is next on")  >= 0 ||
+        lc.indexOf("next step on")     >= 0 ||
+        lc.indexOf("next action on")   >= 0 ||
+        lc.indexOf("my projects")      >= 0 ||
+        lc.indexOf("which projects")   >= 0) {
+        return "personal_query";
+    }
+
     // HA control verbs — clearly a command, even if the entity isn't in our
     // table.
     if (lc.indexOf("turn on")    >= 0 ||
