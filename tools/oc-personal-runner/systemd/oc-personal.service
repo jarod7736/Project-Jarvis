@@ -25,13 +25,18 @@ Environment=OC_ANTHROPIC_MODEL=claude-sonnet-4-6
 Environment=OC_MAX_TURNS=4
 Environment=OC_MAX_OUTPUT_TOKENS=200
 Environment=BRAIN_VAULT_PATH=/srv/2ndbrain
-Environment=OC_BRAIN_MCP_COMMAND=__PROJECT_ROOT__/tools/brain-mcp/.venv/bin/python
-# Quoted so systemd does not split on the space inside the value. Without
-# quotes, `Environment=OC_BRAIN_MCP_ARGS=-m brain_mcp.server` is parsed as
-# two pairs — OC_BRAIN_MCP_ARGS=-m plus an orphan `brain_mcp.server` — and
-# the runner spawns brain-mcp with just `-m` (no module name), crashing it
-# with "Argument expected for the -m option" on every start.
-Environment="OC_BRAIN_MCP_ARGS=-m brain_mcp.server"
+# OC_MCP_SERVERS is the JSON catalog of stdio MCP children the runner
+# spawns at startup. Each entry needs `command` and `args`; optional
+# `env` overrides the spawn env, optional `stderr` redirects the child's
+# stderr to that path (otherwise mcp.stdio_client silently discards it,
+# which makes "Connection closed" errors essentially undebuggable).
+#
+# Quoted so systemd does not split the JSON on whitespace into multiple
+# KEY=VAL pairs — same footgun as the old OC_BRAIN_MCP_ARGS line.
+#
+# Two-MCP setup: brain-mcp (wiki) + google-mcp (Gmail + Calendar). Drop
+# the google entry and re-render with deploy.sh if you don't want it.
+Environment="OC_MCP_SERVERS={\"brain\":{\"command\":\"__PROJECT_ROOT__/tools/brain-mcp/.venv/bin/python\",\"args\":[\"-m\",\"brain_mcp.server\"],\"env\":{\"BRAIN_VAULT_PATH\":\"/srv/2ndbrain\"},\"stderr\":\"/tmp/brain-mcp.err\"},\"google\":{\"command\":\"__PROJECT_ROOT__/tools/google-mcp/.venv/bin/python\",\"args\":[\"-m\",\"google_mcp.server\"],\"env\":{\"GOOGLE_CREDENTIALS_PATH\":\"__USER_HOME__/.config/oc-personal/google-credentials.json\",\"GOOGLE_TOKEN_PATH\":\"__USER_HOME__/.config/oc-personal/google-token.json\"},\"stderr\":\"/tmp/google-mcp.err\"}}"
 EnvironmentFile=-/etc/oc-personal/secrets.env
 ExecStart=__PROJECT_ROOT__/tools/oc-personal-runner/.venv/bin/python -m oc_personal.server
 Restart=on-failure

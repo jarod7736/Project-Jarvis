@@ -1,31 +1,34 @@
-"""Agent loop: Claude (Anthropic SDK) with brain-mcp tools attached.
+"""Agent loop: Claude (Anthropic SDK) with stdio MCP tools attached.
 
 Manual MCP integration rather than the Claude Agent SDK — keeps the loop
 explicit so a maintainer can read it top-to-bottom without learning a new SDK.
 
 Lifecycle:
-  - At server startup we spawn brain-mcp as a stdio child via mcp.client.stdio,
-    initialize the MCP session, and list its tools once.
+  - At server startup we spawn one stdio child per entry in
+    ``config.MCP_SERVERS`` (typically brain-mcp and google-mcp), initialize
+    each session, list each one's tools, and merge them into a single
+    Anthropic-tool list. A name→session map routes subsequent tool calls
+    back to the right child.
   - For each /v1/chat/completions request with model=oc-personal:
-      1. Convert the MCP tool list to Anthropic's tool schema.
-      2. Call Claude with the user's transcript + tool definitions.
-      3. If response.stop_reason == "tool_use": dispatch each tool_use block
-         to brain-mcp via session.call_tool, append tool_result, repeat.
+      1. Call Claude with the user's transcript + the merged tool definitions.
+      2. If response.stop_reason == "tool_use": dispatch each tool_use block
+         to the owning session via call_tool, append tool_result, repeat.
          Cap at MAX_AGENT_TURNS to bound latency.
-      4. Return the final assistant text.
+      3. Return the final assistant text.
 
-Concurrency note: a single MCP session is shared across requests. brain-mcp
-tools are short-running and stateless w.r.t. each other (capture writes
-unique filenames, search/lint/ingest_status are read-only), so serialization
-is fine for the call volume Jarvis generates (one voice query at a time).
-A lock guards the session in case of concurrent HTTP requests anyway.
+Concurrency note: MCP sessions are shared across requests. The tools we ship
+are short-running and stateless w.r.t. each other (capture writes unique
+filenames; search/list/draft/create are read-or-append, no transactional
+overlap). A lock serializes calls anyway since Jarvis produces one voice
+query at a time.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+import shlex
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 from anthropic import AsyncAnthropic
@@ -37,59 +40,105 @@ from . import config
 log = logging.getLogger(__name__)
 
 
+def _build_stdio_params(name: str, spec: dict[str, object]) -> StdioServerParameters:
+    """Render an MCP_SERVERS spec into StdioServerParameters.
+
+    If ``spec["stderr"]`` is a path, wrap the command via
+    ``/bin/sh -c "exec ... 2>>PATH"`` so the child's stderr lands somewhere
+    grep-able. Without this, the MCP stdio_client silently discards
+    everything the child writes to stderr — which makes "Connection closed"
+    errors essentially undebuggable.
+    """
+    command = str(spec["command"])
+    args = [str(a) for a in spec.get("args", [])]
+    env = {str(k): str(v) for k, v in (spec.get("env") or {}).items()}
+    stderr_path = spec.get("stderr")
+    if stderr_path:
+        wrapped = "exec {cmd} {args} 2>>{err}".format(
+            cmd=shlex.quote(command),
+            args=" ".join(shlex.quote(a) for a in args),
+            err=shlex.quote(str(stderr_path)),
+        )
+        return StdioServerParameters(command="/bin/sh", args=["-c", wrapped], env=env)
+    return StdioServerParameters(command=command, args=args, env=env)
+
+
 class BrainAgent:
-    """Holds the long-lived MCP session and runs request-scoped agent loops."""
+    """Holds long-lived MCP sessions and runs request-scoped agent loops."""
 
     def __init__(self) -> None:
         self._anthropic = AsyncAnthropic(api_key=config.ANTHROPIC_API_KEY)
-        self._session: ClientSession | None = None
+        self._sessions: dict[str, ClientSession] = {}
+        # tool name → session that owns it. Built from list_tools() of each
+        # child at startup; tools_anthropic is the merged Anthropic-shape
+        # tool list passed to messages.create().
+        self._tool_to_session: dict[str, ClientSession] = {}
         self._tools_anthropic: list[dict[str, Any]] = []
         self._lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifecycle(self):
         # mcp's stdio_client wraps an anyio TaskGroup whose cancel scope is
-        # bound to the entering task; the nested `async with` blocks must
-        # remain in the live call frame of the FastAPI lifespan task.
-        # Manual __aenter__/__aexit__ across separate methods produced
-        # "Attempted to exit cancel scope in a different task" on startup.
-        import shlex
-        _wrapped = "exec {cmd} {args} 2>>/tmp/brain-mcp.err".format(
-            cmd=shlex.quote(config.BRAIN_MCP_COMMAND),
-            args=" ".join(shlex.quote(a) for a in config.BRAIN_MCP_ARGS),
-        )
-        params = StdioServerParameters(
-            command="/bin/sh",
-            args=["-c", _wrapped],
-            env={"BRAIN_VAULT_PATH": config.BRAIN_VAULT_PATH},
-        )
-        async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
+        # bound to the entering task; nested `async with` blocks must remain
+        # in the live call frame of the FastAPI lifespan task (manual
+        # __aenter__/__aexit__ across separate methods produces "Attempted
+        # to exit cancel scope in a different task" on startup).
+        #
+        # AsyncExitStack lets us spawn N children with the same per-task
+        # semantics as a single nested `async with` chain.
+        async with AsyncExitStack() as stack:
+            for srv_name, spec in config.MCP_SERVERS.items():
+                params = _build_stdio_params(srv_name, spec)
+                read, write = await stack.enter_async_context(stdio_client(params))
+                session = await stack.enter_async_context(ClientSession(read, write))
                 await session.initialize()
                 tools_resp = await session.list_tools()
-                self._session = session
-                self._tools_anthropic = [
-                    {
+                self._sessions[srv_name] = session
+                tool_names_here: list[str] = []
+                for t in tools_resp.tools:
+                    if t.name in self._tool_to_session:
+                        # Two servers exposing the same tool name is a config
+                        # bug — silently shadowing would route to the wrong
+                        # backend at random.
+                        owner = next(
+                            (n for n, s in self._sessions.items()
+                             if s is self._tool_to_session[t.name]),
+                            "<unknown>",
+                        )
+                        log.error(
+                            "duplicate tool name %r from %s shadows %s — ignoring later",
+                            t.name, srv_name, owner,
+                        )
+                        continue
+                    self._tool_to_session[t.name] = session
+                    self._tools_anthropic.append({
                         "name": t.name,
                         "description": t.description or "",
                         "input_schema": t.inputSchema,
-                    }
-                    for t in tools_resp.tools
-                ]
+                    })
+                    tool_names_here.append(t.name)
                 log.info(
-                    "brain-mcp session initialized with %d tools: %s",
-                    len(self._tools_anthropic),
-                    [t["name"] for t in self._tools_anthropic],
+                    "mcp session %s initialized with %d tools: %s",
+                    srv_name, len(tool_names_here), tool_names_here,
                 )
-                try:
-                    yield
-                finally:
-                    self._session = None
+
+            log.info(
+                "agent ready: %d MCP servers, %d total tools",
+                len(self._sessions), len(self._tools_anthropic),
+            )
+            try:
+                yield
+            finally:
+                self._sessions.clear()
+                self._tool_to_session.clear()
+                self._tools_anthropic.clear()
 
     async def _call_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        """Call an MCP tool and flatten the result to a single string."""
-        assert self._session is not None
-        result = await self._session.call_tool(name, arguments)
+        """Call an MCP tool on its owning session; flatten the result."""
+        session = self._tool_to_session.get(name)
+        if session is None:
+            return f"Tool {name!r} is not registered with any MCP server."
+        result = await session.call_tool(name, arguments)
         # MCP tool results come back as a list of content blocks; for our
         # tools they're all text. Concatenate; preserve ordering.
         parts: list[str] = []
