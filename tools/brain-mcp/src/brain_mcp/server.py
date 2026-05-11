@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from .tools import capture, ingest, lint, search
+from .tools import capture, ingest, lint, projects, search
 
 
 mcp = FastMCP("brain")
@@ -87,6 +87,44 @@ def brain_lint() -> str:
     raw data for the calling agent to summarize prose-style if asked.
     """
     return lint.run()
+
+
+@mcp.tool()
+def brain_list_projects(status: str | None = None) -> str:
+    """List wiki pages with ``type: project`` frontmatter.
+
+    Pages opt in by adding ``type: project`` (plus optional ``status``,
+    ``next_action``, ``priority``, ``updated``). This tool returns a JSON
+    list sorted by status (active → backlog → done → abandoned) and
+    priority (high → medium → low), with newest ``updated`` first within
+    ties. Missing fields come back as null — callers should treat the
+    schema as "loose."
+
+    Args:
+        status: Optional filter. One of "active", "backlog", "done",
+            "abandoned". When omitted, returns all project pages.
+    """
+    return projects.list_projects(status=status)
+
+
+@mcp.tool()
+def brain_set_next_action(page: str, action: str) -> str:
+    """Set the ``next_action:`` field on a project page; bump ``updated:``.
+
+    Commits and pushes to GitHub. Refuses to edit pages that do not yet
+    have ``type: project`` in their frontmatter — creating projects from
+    voice is intentionally not supported (avoids ASR-driven proliferation
+    of half-baked project pages).
+
+    Args:
+        page: Page name. Accepts the stem ("boat"), filename ("boat.md"),
+            or a wiki-relative path ("projects/boat"). Case-insensitive
+            stem match falls back if the direct path lookup fails.
+        action: The imperative phrase to record (e.g. "order the bilge
+            pump"). Stored verbatim — strip the trigger phrase before
+            calling.
+    """
+    return projects.set_next_action(page=page, action=action)
 
 
 @mcp.tool()
