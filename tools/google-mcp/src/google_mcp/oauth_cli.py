@@ -82,7 +82,7 @@ def main() -> None:
     # run_local_server spins up a temporary HTTP server on 127.0.0.1:<port>
     # to catch the redirect. Browser opens automatically if one is reachable;
     # otherwise the URL is printed and you open it manually.
-    creds = flow.run_local_server(port=args.port, open_browser=True)
+    creds = flow.run_local_server(port=args.port, open_browser=False)
 
     args.token.parent.mkdir(parents=True, exist_ok=True)
     args.token.write_text(creds.to_json(), encoding="utf-8")
