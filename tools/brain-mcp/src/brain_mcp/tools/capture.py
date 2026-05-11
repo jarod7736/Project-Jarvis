@@ -8,20 +8,11 @@ picks it up. No LLM, sub-second.
 from __future__ import annotations
 
 import re
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .. import config, vault
-
-
-_FRONTMATTER_TEMPLATE = (
-    "---\n"
-    "source: {source}\n"
-    "captured_at: {captured_at}\n"
-    "type: note\n"
-    "---\n"
-    "{content}\n"
-)
+from .. import config, frontmatter, vault
 
 
 def _sanitize_source(source: str) -> str:
@@ -61,12 +52,17 @@ def run(content: str, source: str = "jarvis") -> str:
         path = _next_available_path(path, suffix="2")
 
     iso_z = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    body = _FRONTMATTER_TEMPLATE.format(
-        source=safe_source,
-        captured_at=iso_z,
-        content=text,
-    )
-    path.write_text(body, encoding="utf-8")
+    fm = OrderedDict([
+        ("source", safe_source),
+        ("captured_at", iso_z),
+        # Auto-bump `updated:` on every write. `captured_at` is set-once
+        # creation time; `updated` moves with each edit (and brain_lint's
+        # staleness check reads this field). On a brand-new capture they're
+        # the same date — that's expected.
+        ("updated", now.strftime("%Y-%m-%d")),
+        ("type", "note"),
+    ])
+    path.write_text(frontmatter.serialize(fm, text + "\n"), encoding="utf-8")
 
     rel = path.relative_to(config.VAULT_PATH)
 
