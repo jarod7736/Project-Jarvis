@@ -161,12 +161,19 @@ cmd_install() {
         local svc_src="${PKG_DIR}/systemd/oc-personal.service"
         local svc_tmp
         svc_tmp="$(mktemp)"
-        # The checked-in unit is a template with __RUN_USER__ / __PROJECT_ROOT__
-        # placeholders (see tools/oc-personal-runner/systemd/oc-personal.service).
-        # Replace those first, then key-anchored substitutions handle the
+        # The checked-in unit is a template with __RUN_USER__, __PROJECT_ROOT__,
+        # and __USER_HOME__ placeholders (see
+        # tools/oc-personal-runner/systemd/oc-personal.service). Replace
+        # those first, then key-anchored substitutions handle the
         # configurable knobs.
+        local user_home
+        user_home="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
+        if [ -z "${user_home}" ]; then
+            user_home="${HOME}"
+        fi
         sed -e "s|__RUN_USER__|${RUN_USER}|g" \
             -e "s|__PROJECT_ROOT__|${PROJECT_ROOT}|g" \
+            -e "s|__USER_HOME__|${user_home}|g" \
             -e "s|^Environment=OC_LMSTUDIO_URL=.*|Environment=OC_LMSTUDIO_URL=${LMSTUDIO_URL}|" \
             -e "s|^Environment=OC_LISTEN_PORT=.*|Environment=OC_LISTEN_PORT=${LISTEN_PORT}|" \
             -e "s|^EnvironmentFile=.*|EnvironmentFile=-${SECRETS_FILE}|" \

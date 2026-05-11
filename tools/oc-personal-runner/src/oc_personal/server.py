@@ -88,7 +88,9 @@ async def healthz() -> dict[str, Any]:
         "personal_model": config.PERSONAL_MODEL,
         "anthropic_model": config.ANTHROPIC_MODEL,
         "lmstudio": config.LMSTUDIO_URL,
-        "agent_ready": bool(agent and agent._session is not None),
+        "agent_ready": bool(agent and agent._sessions),
+        "mcp_servers": sorted(agent._sessions.keys()) if agent else [],
+        "tools": [t["name"] for t in (agent._tools_anthropic if agent else [])],
     }
 
 
