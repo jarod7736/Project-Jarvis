@@ -29,7 +29,9 @@ import asyncio
 import logging
 import shlex
 from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from anthropic import AsyncAnthropic
 from mcp import ClientSession, StdioServerParameters
@@ -160,11 +162,23 @@ class BrainAgent:
                 {"role": "user", "content": user_text},
             ]
 
+            # Claude has no clock; without this prefix it invents a date near
+            # its training cutoff and asks the calendar tool about the wrong
+            # day. America/Chicago matches the primary Google Calendar tz.
+            now = datetime.now(ZoneInfo("America/Chicago"))
+            date_prefix = (
+                f"Current date: {now.strftime('%A %Y-%m-%d')}. "
+                f"Current time: {now.strftime('%H:%M %Z')}. "
+                f"When the user says \"today\" / \"tomorrow\" / \"this week\", "
+                f"resolve against this date.\n\n"
+            )
+            system_prompt = date_prefix + config.SYSTEM_PROMPT
+
             final_text = ""
             for turn in range(config.MAX_AGENT_TURNS):
                 resp = await self._anthropic.messages.create(
                     model=config.ANTHROPIC_MODEL,
-                    system=config.SYSTEM_PROMPT,
+                    system=system_prompt,
                     max_tokens=config.MAX_OUTPUT_TOKENS,
                     tools=self._tools_anthropic,
                     messages=messages,
