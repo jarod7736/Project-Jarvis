@@ -950,6 +950,38 @@ The MCP server is a stdio child of OpenClaw, not a network daemon. Spawn-on-dema
 2. Persona/context injection (constant "about-me" snippet prepended to every personal query) — desirable but not in this phase. If wanted, add a `brain_persona()` MCP tool that returns a curated profile note's contents, and have OpenClaw's `oc-personal` system prompt prepend it. Defer until baseline RAG works.
 3. Should `brain_ingest` run on a cron on lobsterboy, or stay manual (laptop-driven by the user opening a Claude Code session)? Cron means new voice notes get cleaned up overnight without intervention; manual means the user reviews each ingest pass. Default: manual until trust is established, then cron.
 
+**Phase 8 Validation Retro (2026-05-13):**
+
+Tracker: `plans/phase8-2nd-brain-validation.md`. Six of ten gates passed in a single ~30-minute session, four deferred. The code work was already on `main` via PRs #33–36 (multi-MCP runner, calendar/email/personal routing); this session just walked the gates.
+
+**Passed (server-side, ran from WSL via SSH to lobsterboy):**
+
+- **Gate 1 — runner health.** `/healthz` returned `agent_ready=true`, `mcp_servers=[brain, google]`, **12 tools** total. Drift from the plan's 4-tool table is intentional: the multi-MCP refactor in PR #35 expanded brain to 6 tools (`brain_search/brain_capture/brain_lint/brain_list_projects/brain_set_next_action/brain_ingest_status`) and added google's 6 (`gcal_*/gmail_*`). `brain_ingest` itself is *not* exposed at the agent surface — only its status — because it's slow and scheduler-driven. Update the PLAN tool table next time the doc gets touched.
+- **Gate 2 — `brain_search` returns wiki pages.** Forced via an oc-personal call ("search my wiki for karpathy"); agent returned 4 real paths under `/srv/2ndbrain/wiki/` from 15 total matches.
+- **Gate 3 — `brain_capture` writes + pushes.** Test note `raw/notes/2026-05-13T19-42-52-jarvis.md` landed on disk, committed (`f618cbc`), pushed to `origin/main` within seconds. Frontmatter matches plan (`source: jarvis / captured_at / type: note`); runner adds a harmless `updated:` field on top.
+- **Gate 4 — OpenClaw end-to-end with `model=oc-personal`.** Coherent OpenAI-compat response, `brain_search` invoked inside the agent loop (the model "knew" the wiki had nothing on kettlebells — only possible if search ran).
+
+**Passed (device-driven, observed from oc-personal journal):**
+
+- **Gate 5 — voice personal query.** "What do I know about kettlebells" → `192.168.1.104` (CoreS3) → `agent calling tool brain_search with {'query': 'kettle bells'}` → 200 OK. Note the device's Qwen-routed query string came through as `'kettle bells'` (space-separated) — `brain_search` is permissive enough to still hit, but worth a few-shot tweak in `prompts/intent_prompt.h` if it ever causes a miss.
+- **Gate 6 — voice journal note.** "Note that I called the plumber" → `agent calling tool brain_capture with {'content': 'Called the plumber.'}` → file `raw/notes/2026-05-13T19-56-46-jarvis.md`, commit `b00f55a` pushed to `origin/main`. Sub-second wall-clock.
+
+**Deferred:**
+
+- **Gate 7 — OFFLINE tier guard.** First attempt was inconclusive: user disconnected Tailscale on the dev box, but the device reaches lobsterboy on the **LAN** (`http://192.168.1.178:8080` per the deploy memo), not the Tailscale path. The CoreS3 stayed online and the request completed mid-window. A real test needs to break the device's WiFi (router power-cycle or forgetting NVS creds). Code path is short and code-readable; deferred without scheduling.
+- **Gate 8 — `brain_ingest` end-to-end.** Out of band on lobsterboy; not on the device hot path. Belongs in a brain-mcp-side validation pass, not this phase.
+- **Gate 9 — `brain_lint` structural signals.** Cheap; defer to a follow-up.
+- **Gate 10 — sync collision.** No real conflict observed in practice; defer until one is.
+
+**Drift / surprises discovered:**
+
+- **Plan's tool table is stale.** PR #35 reshaped the catalog from 4 brain tools to 6 brain + 6 google. Plan §"Four MCP tools exposed by `brain-mcp`" should be a "current catalog" pointer to `/healthz` rather than a frozen table. Low-priority doc fix.
+- **The device hits lobsterboy on the LAN, not Tailscale.** Documented in the deploy memo but not in PLAN.md §Phase 8 architecture diagram (which shows Tailscale as the device→lobsterboy path). The diagram is aspirational — actual wiring uses the bare LAN port `:8080` because the CoreS3 can't join the tailnet. Confirmed correct; just an arrow on the diagram.
+- **Test note cleanup pending.** Two test commits (`f618cbc`, `b00f55a`) sit on `origin/main`. Harmless if ingested; can be `git rm`'d if you'd rather not see them in `brain_lint` output later.
+- **`usage` token counts come back as zeros.** The runner doesn't pass through upstream Anthropic token counts. Not a blocker but means OpenClaw-side cost telemetry has to come from elsewhere if we ever want it.
+
+**State at retro:** Phase 8 closed for hardware-validation purposes. The next time someone touches the brain-mcp surface (adding a vector index, persona injection, scheduled ingest), gates 8–10 should be picked up alongside.
+
 ---
 
 ## Cross-Phase Dependency Graph
