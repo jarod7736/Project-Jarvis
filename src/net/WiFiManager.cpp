@@ -26,10 +26,12 @@ static constexpr uint32_t kPerSlotTimeoutMs = 8000;
 // Idempotent: safe to call on every reconnect. configTime() reinit's
 // the SNTP state machine without leaking handles.
 static void kickNtpSync() {
-    setenv("TZ", jarvis::config::kTimezoneDefault, /*overwrite=*/1);
-    tzset();
-    configTime(/*gmtOffset_sec=*/0, /*daylightOffset_sec=*/0,
-               jarvis::config::kNtpServer);
+    // configTzTime sets TZ atomically with the SNTP config. Using
+    // setenv()+tzset()+configTime() separately races: configTime can
+    // reset TZ to UTC internally on some Arduino-ESP32 versions, so
+    // getLocalTime() returns UTC despite the setenv.
+    configTzTime(jarvis::config::kTimezoneDefault,
+                 jarvis::config::kNtpServer);
     Serial.printf("[WIFI] NTP sync requested (server=%s tz=%s)\n",
                   jarvis::config::kNtpServer,
                   jarvis::config::kTimezoneDefault);
