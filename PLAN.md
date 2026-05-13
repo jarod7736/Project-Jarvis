@@ -743,6 +743,40 @@ Voice cloning legal note: do NOT clone real public figures (Walken specifically)
 
 **Dependency:** All prior phases.
 
+#### Phase 7 retro (2026-05-12)
+
+Code shipped during the Phase 6 → 8 sprint (Logger, OTA, MQTT, watchdog,
+cloud-TTS router) had never been actively exercised on hardware. This
+retro covers the validation gate, not the implementation.
+
+**Gates run:**
+
+| # | Gate | Result | Notes |
+|---|---|---|---|
+| 1 | Watchdog reboot | ✅ | Injected `delay(35000)` after `esp_task_wdt_reset()`. Panicked at exactly 30.0 s on `loopTask (CPU 1)`, clean `abort()` → reboot → recovery to IDLE. |
+| 2 | OTA round-trip | ✅ | `pio run -t upload --upload-port 192.168.1.104` from Windows. 1.5 MB in ~30 s wire + ~4 s post-reboot. |
+| 3 | MQTT pub/sub | ✅ | Subscriber on lobsterboy saw `jarvis/state THINKING → SPEAKING → IDLE`. `mosquitto_pub jarvis/command "what time is it"` dispatched without wake word per `state_machine.cpp:127`. |
+| 6a | SD absent | ✅ | Boot without card; `logExchange()` early-exited cleanly on `g_ok=false`; full FSM cycle. |
+| 6d | OpenClaw down | ✅ | `sudo systemctl stop oc-personal`; device gracefully spoke "I can't reach my notes right now"; no crash. |
+
+**Deferred** (not blockers for Phase 7 close):
+- **Gate 4** (OpenAI cloud TTS happy path) and **Gate 5** (TTS fallback): `tts_provider` stays on melotts; user opted to defer cloud TTS until after Phase 8.
+- **Gate 7** (24-h soak): worth running before any user-facing release; not gate-critical.
+- **Gate 6 rows b/c/e/f** (HA unreachable, hotspot failover, all-WiFi-down, LLM Module power-cycle): low marginal value vs. disruption to the home network, or covered structurally by row d.
+
+**Drift discovered:**
+
+1. **Tailscale poisoned `192.168.1.0/24` routing on the dev host.** OTA invitations from Windows went into the tailnet (where the CoreS3 isn't reachable) because lobsterboy advertises the subnet via `--advertise-routes`. Fixed with `tailscale set --accept-routes=false` on the dev box. Won't bite again, but worth flagging: any future LAN-direct work from a Windows tailnet member needs this set, or those routes will poach.
+2. **`platformio.ini` needed `upload_protocol = espota` + multi-line `upload_flags`.** The env-var path (`$env:PLATFORMIO_UPLOAD_FLAGS=...`) mangles multi-flag input — PIO captures everything after `--auth=` as the auth value. Two flags in the ini are non-negotiable: `--auth=<ota_pass>` and a fixed `--host_port` (for firewall pinning during early debug; can drop once known good).
+3. **TZ bug, fixed mid-gate.** `WiFiManager::kickNtpSync()` did `setenv("TZ", ...)` + `tzset()` + `configTime(0, 0, ...)`. On this Arduino-ESP32 (`3.20017.241212`), `configTime()` overwrites the TZ env to UTC internally, so `getLocalTime()` returned UTC despite the setenv. Replaced both with a single `configTzTime(kTimezoneDefault, kNtpServer)` call (`net/WiFiManager.cpp:28`). Discovered when the time intent answered with UTC for Austin Central.
+4. **PSRAM "PSRAM ID read error" on every boot is harmless.** Logs `E (284) opi psram: PSRAM ID read error: 0x00000000` then immediately recovers with `psramInit(): PSRAM enabled`. Cosmetic — not worth muting.
+5. **Qwen frequently produces unparseable JSON for the time intent.** Falls through to the keyword classifier, which correctly classifies as `on_device`. Working as designed per the Phase 5 retro, but means the time intent's "correctness" actually flows through the deterministic keyword path, not the LLM.
+
+**State as of this retro:**
+- Worktree `phase7-validation` (branch `worktree-phase7-validation`) holds: `plans/phase7-validation.md`, `scripts/phase7/mqtt-watch.sh`, `scripts/phase7/mqtt-send.sh`, and the TZ fix in `src/net/WiFiManager.cpp`.
+- Windows checkout (`F:\projects\Project-Jarvis`) holds the same TZ fix (applied manually) plus the `platformio.ini` espota config; the watchdog test patch was applied and reverted before commit.
+- Phase 7 is closed for the purposes of unblocking Phase 8 follow-up work. Re-run gate 7 (soak) and gates 4/5 (cloud TTS) before any release that's not on-the-bench dev.
+
 ---
 
 ### Phase 8 — 2nd Brain Integration
