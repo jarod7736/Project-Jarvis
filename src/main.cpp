@@ -16,6 +16,7 @@
 #include "app/IntentRouter.h"
 #include "app/ModeManager.h"
 #include "app/NVSConfig.h"
+#include "app/SettingsScreen.h"
 #include "app/state_machine.h"
 #include "config.h"
 #include "hal/AudioPlayer.h"
@@ -227,6 +228,11 @@ void setup() {
     jarvis::app::intentRouterBegin(&g_module);
     jarvis::app::stateMachineBegin(&g_module);
 
+    // SettingsScreen needs the LLMModule pointer so the mic-gain slider
+    // can run the audio-chain soft-restart on touch-up. Without this
+    // call the slider falls back to NVS-only (effective next boot).
+    jarvis::app::SettingsScreen::setLLMModule(&g_module);
+
     // Wire AudioPlayer's "track ended" event back into LLMModule so the
     // FSM's existing on_speak_done_ callback (registered by
     // stateMachineBegin) gets fired when cloud TTS finishes — same way
@@ -272,6 +278,17 @@ void loop() {
         // captive portal's DNS catch-all and refresh the battery
         // indicator (display is owned by drawConfigScreen()).
         jarvis::net::CaptivePortal::tick();
+        refreshBattery();
+        return;
+    }
+
+    if (jarvis::app::ModeManager::isSettings()) {
+        // Settings mode: voice pipeline is paused (the reactor sprite
+        // would otherwise paint over the slider screen). ModeManager
+        // pumps SettingsScreen::tick() internally, so we have nothing
+        // to do here besides keep the battery indicator fresh — even
+        // though it's not drawn on the Settings screen, we still want
+        // the cached value current for when we return to Normal.
         refreshBattery();
         return;
     }

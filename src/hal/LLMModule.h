@@ -80,6 +80,34 @@ public:
     bool          hasTts()        const { return melotts_work_id_.length() > 0; }
     bool          hasLlm()        const { return llm_work_id_.length() > 0; }
 
+    // Apply a new microphone capture gain ("mic gain") at runtime. The
+    // StackFlow API has no `update` action for any unit — the only way
+    // to change `capVolume` is to tear down + re-setup the audio chain.
+    // This call performs that soft-restart:
+    //   1. asr.exit  (downstream first)
+    //   2. kws.exit
+    //   3. audio.exit / audio.setup(capVolume=…) / audio.work
+    //   4. kws.setup
+    //   5. asr.setup
+    //
+    // Caller MUST be in DeviceState::IDLE — running this mid-query would
+    // kill the in-flight ASR/LLM. SettingsScreen gates on currentState()
+    // before invoking. Returns true if the pipeline came back up; false
+    // means the device is wedged and a reboot is recommended (rare —
+    // each sub-step is logged on failure).
+    //
+    // `pct` is the user-facing 0..100 slider value. Maps linearly to the
+    // StackFlow `capVolume` range, with 50%→1.0 (unity, just past the
+    // ">1 increases gain" threshold) and 100%→2.0 (safe ceiling — the
+    // spec allows up to 10.0 but anything >2.0 is typically too noisy).
+    // Out-of-range values are clamped.
+    //
+    // Untested against the v1.3 firmware that deprecated audio.setup
+    // (Phase 1 retro). The daemon may accept the setup silently, ignore
+    // it, or refuse it — instrumentation in the implementation logs
+    // whichever happens so we can iterate on the bench.
+    bool applyMicGain(int pct);
+
 private:
     bool sendAudioWork();             // explicit start, retro fallback
     bool setupKws();
