@@ -51,6 +51,45 @@ String buildAudioWorkCmd(const String& request_id) {
     return out;
 }
 
+// audio.exit: stop the capture pipeline. Sent raw (not via ApiAudio::exit)
+// so the request shape stays symmetric with sendAudioWork() above and so
+// we can name the request_id ourselves for response correlation.
+String buildAudioExitCmd(const String& request_id) {
+    JsonDocument doc;
+    doc["request_id"] = request_id;
+    doc["work_id"]    = "audio.1000";
+    doc["action"]     = "exit";
+    String out;
+    serializeJson(doc, out);
+    return out;
+}
+
+// audio.setup with caller-supplied capVolume. Builds the same payload
+// ApiAudio::setup() would, but raw so the boot path and the live-update
+// path stay parallel — and so applyMicGain() doesn't fight the lib's
+// hardcoded 5s response wait when audio.setup is silently dropped by
+// the v1.3 firmware.
+String buildAudioSetupCmd(const String& request_id, float capVolume) {
+    JsonDocument doc;
+    doc["request_id"]         = request_id;
+    doc["work_id"]            = "audio";
+    doc["action"]             = "setup";
+    doc["object"]             = "audio.setup";
+    doc["data"]["capcard"]    = 0;
+    doc["data"]["capdevice"]  = 0;
+    doc["data"]["capVolume"]  = capVolume;
+    doc["data"]["playcard"]   = 0;
+    doc["data"]["playdevice"] = 1;
+    doc["data"]["playVolume"] = 0.15f;  // Speaker volume lives on the host's
+                                        // own M5.Speaker path (AudioPlayer)
+                                        // — this value is unused by the
+                                        // current pipeline but must be
+                                        // present in the payload.
+    String out;
+    serializeJson(doc, out);
+    return out;
+}
+
 }  // namespace
 
 LLMModule::LLMModule()
@@ -463,6 +502,115 @@ void LLMModule::finishSpeaking() {
     if (!speaking_) return;
     speaking_ = false;
     if (on_speak_done_) on_speak_done_();
+}
+
+bool LLMModule::applyMicGain(int pct) {
+    if (!ready_) {
+        Serial.println("[LLMModule] applyMicGain: not ready");
+        return false;
+    }
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+
+    // 0..100% → 0.0..2.0 in StackFlow capVolume terms. See header for
+    // rationale (50% = unity, 100% = 2x, well below the 10.0 spec ceiling
+    // where the input clips into noise on this mic).
+    const float capVolume = (float)pct / 50.0f;
+    Serial.printf("[LLMModule] applyMicGain(%d%%) -> capVolume=%.2f\n",
+                  pct, capVolume);
+
+    // ── 1. Tear down consumers of sys.pcm first ──────────────────────────
+    // Order matters: ASR is downstream of KWS (input chain is sys.pcm →
+    // kws_work_id → asr). Exiting in the same order avoids the daemon
+    // emitting "input dead" errors for the still-bound downstream unit.
+    if (asr_work_id_.length()) {
+        module_->asr.exit(asr_work_id_, "asr_exit_mic");
+        Serial.printf("[LLMModule] asr.exit(%s)\n", asr_work_id_.c_str());
+        asr_work_id_ = "";
+    }
+    if (kws_work_id_.length()) {
+        module_->kws.exit(kws_work_id_, "kws_exit_mic");
+        Serial.printf("[LLMModule] kws.exit(%s)\n", kws_work_id_.c_str());
+        kws_work_id_ = "";
+    }
+
+    // ── 2. Cycle the audio unit with the new capVolume ───────────────────
+    // audio.exit then audio.setup. Both raw; the v1.3 firmware may drop
+    // audio.setup silently (deprecation), in which case we proceed
+    // optimistically — the next audio.work will start capture at whatever
+    // capVolume the daemon chose for itself.
+    {
+        String cmd = buildAudioExitCmd("audio_exit_mic");
+        module_->msg.sendCmd(cmd.c_str());
+        Serial.println("[LLMModule] audio.exit");
+        // Brief settle: give the daemon a moment to release the soundcard
+        // before re-claiming it. Empirically the AX630C side needs ≥50 ms.
+        delay(150);
+    }
+    {
+        const String request_id = "audio_setup_mic";
+        String cmd = buildAudioSetupCmd(request_id, capVolume);
+        module_->msg.sendCmd(cmd.c_str());
+
+        // Wait briefly for a response so we can distinguish "accepted",
+        // "rejected", and "silently ignored" outcomes in the serial log.
+        // The pipeline still gets re-armed in all three cases — only an
+        // explicit error code from the daemon is treated as a failure.
+        const uint32_t deadline = millis() + 2000;
+        bool got_response = false;
+        int  error_code   = 0;
+        while (millis() < deadline) {
+            module_->update();
+            for (auto& m : module_->msg.responseMsgList) {
+                JsonDocument doc;
+                if (deserializeJson(doc, m.raw_msg)) continue;
+                if (doc["request_id"].as<String>() != request_id) continue;
+                error_code   = doc["error"]["code"] | -99;
+                got_response = true;
+                break;
+            }
+            module_->msg.responseMsgList.clear();
+            if (got_response) break;
+            delay(20);
+        }
+        if (!got_response) {
+            Serial.println("[LLMModule] audio.setup: no response in 2s "
+                           "(daemon likely treats it as no-op on this FW)");
+        } else if (error_code != 0) {
+            Serial.printf("[LLMModule] audio.setup: daemon returned error=%d "
+                          "— continuing with re-arm anyway\n", error_code);
+        } else {
+            Serial.println("[LLMModule] audio.setup OK");
+        }
+    }
+
+    // ── 3. Re-arm capture + KWS + ASR ────────────────────────────────────
+    // sendAudioWork() is fire-and-forget (it would be on the boot path too)
+    // so any "already working" race is swallowed by the daemon. Then setup
+    // KWS + ASR in the original order, reusing the same builder functions
+    // begin() uses — no behavioural drift between cold-boot and live-update.
+    if (!sendAudioWork()) {
+        // sendAudioWork currently can't return false, but keep the guard
+        // for future readers who might add validation there.
+        last_error_ = "applyMicGain: sendAudioWork failed";
+        Serial.println("[LLMModule] applyMicGain: sendAudioWork failed");
+        return false;
+    }
+    delay(150);
+
+    if (!setupKws()) {
+        Serial.printf("[LLMModule] applyMicGain: kws.setup failed: %s\n",
+                      last_error_.c_str());
+        return false;
+    }
+    if (!setupAsr()) {
+        Serial.printf("[LLMModule] applyMicGain: asr.setup failed: %s\n",
+                      last_error_.c_str());
+        return false;
+    }
+
+    Serial.println("[LLMModule] applyMicGain: pipeline restored");
+    return true;
 }
 
 }  // namespace jarvis::hal
