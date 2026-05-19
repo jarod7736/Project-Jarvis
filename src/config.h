@@ -177,6 +177,14 @@ constexpr uint16_t    kMqttPort         = 1883;
 constexpr const char* kMqttClientIdBase = "jarvis";   // suffixed with MAC tail
 constexpr const char* kMqttTopicState   = "jarvis/state";
 constexpr const char* kMqttTopicCommand = "jarvis/command";
+// Proactive TTS push channel (Sprint 1 #1, reverse channel). Payloads
+// land in MqttClient's single-slot speak queue and are drained by the
+// FSM from IDLE — going straight to SPEAKING with NO intent routing or
+// LLM call. This is the "Jarvis speaks first" path: lobsterboy's
+// jarvis-notifier publishes here to deliver reminders, morning briefs,
+// stale-WIP nudges. Distinct from jarvis/command (which is treated as
+// an ASR transcript and runs through IntentRouter).
+constexpr const char* kMqttTopicSpeak   = "jarvis/speak";
 // Last-Will payload published by the broker if the device drops without
 // a clean disconnect — lets HA automations detect a stuck/crashed Jarvis.
 constexpr const char* kMqttLwtPayload   = "OFFLINE";

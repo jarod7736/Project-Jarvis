@@ -4,6 +4,12 @@
 .vscode/launch.json
 .vscode/ipch
 
+# Python tool venvs + bytecode (lobsterboy-side services).
+__pycache__/
+*.pyc
+tools/*/.venv/
+tools/*/*.egg-info/
+
 # Local-only reference docs (mirrored from docs.m5stack.com + Axera).
 # 32 MB of PDFs/markdown — see docs/reference/README.md for what's there.
 docs/

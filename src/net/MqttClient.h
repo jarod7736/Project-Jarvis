@@ -5,7 +5,10 @@
 // Publishes the FSM state on every transition to `jarvis/state` (retained
 // so any new HA subscriber sees the current state immediately). Subscribes
 // to `jarvis/command` so HA automations can push text commands to Jarvis,
-// which the FSM treats as if they were ASR transcripts.
+// which the FSM treats as if they were ASR transcripts. Also subscribes
+// to `jarvis/speak` (Sprint 1 reverse channel) so lobsterboy's notifier
+// can deliver proactive TTS — those payloads bypass IntentRouter and go
+// straight to enterSpeaking().
 //
 // Per CLAUDE.md invariants:
 //  - The PubSubClient incoming-message callback only buffers the payload —
@@ -46,6 +49,13 @@ public:
     // arrival overwrites an unconsumed one (commands during SPEAKING
     // are dropped, mirroring KWS-during-active behavior in state_machine).
     static String popPendingCommand();
+
+    // Pop a pending proactive-speak payload. Same single-slot semantics
+    // as popPendingCommand(): a new arrival before the previous one is
+    // drained overwrites it. The FSM only drains from IDLE — payloads
+    // received during LISTENING/SPEAKING wait until the device returns
+    // to IDLE rather than interrupting (single-threaded invariant).
+    static String popPendingSpeak();
 };
 
 }  // namespace jarvis::net
