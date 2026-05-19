@@ -80,8 +80,18 @@ Mp3Buffer downloadBody(HTTPClient& http, int code) {
 
     uint8_t* buf = psramAlloc(cap);
     if (!buf) {
+        // Print free-heap details so future failures are diagnosable
+        // without a debug rebuild. Most often this means PSRAM is
+        // fragmented (lots of small allocs from prior cloud-TTS runs
+        // have left no contiguous block of the requested size).
         Serial.printf("[TtsClient] PSRAM alloc failed (%u bytes)\n",
                       (unsigned)cap);
+        Serial.printf("[TtsClient]   free_psram=%u largest_psram_block=%u\n",
+                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        Serial.printf("[TtsClient]   free_heap=%u largest_heap_block=%u\n",
+                      (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         return out;
     }
 
