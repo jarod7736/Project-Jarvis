@@ -16,6 +16,56 @@ namespace jarvis::net {
 // if a slow AP needs more.
 static constexpr uint32_t kPerSlotTimeoutMs = 8000;
 
+namespace {
+
+// Parse host + port out of an `oc_host`-style NVS value. Accepts:
+//   http://192.168.1.178:8080      → host=192.168.1.178, port=8080
+//   https://lobsterboy.ts.net      → host=lobsterboy.ts.net, port=443
+//   http://example.com             → host=example.com, port=80
+//   192.168.1.178:8080             → host=192.168.1.178, port=8080
+//   192.168.1.178                  → host=192.168.1.178, port=80 (assumed http)
+//
+// `out_host` is filled with a heap String the caller owns; `out_port` is
+// filled with the numeric port. Returns true if parsing yielded a non-
+// empty host. Used by the tier probe so the reachability check follows
+// the user's actual `oc_host` setting rather than a stale compile-time
+// constant — previously the probe targeted kOpenclawProbeHost
+// (192.168.1.108:1234, LM Studio's default) even when the user had
+// migrated oc_host to a different machine like lobsterboy:8080. That
+// mismatch made getConnectivityTier() report HOTSPOT_ONLY whenever
+// LM Studio wasn't running on the original host, which in turn made
+// IntentRouter short-circuit personal_query / journal_note to
+// kErrPersonalOffline. Reading from NVS keeps the probe honest.
+bool parseHostPort(const String& url, String& out_host, uint16_t& out_port) {
+    String s = url;
+    s.trim();
+    if (s.length() == 0) return false;
+
+    bool is_https = false;
+    int scheme_end = s.indexOf("://");
+    if (scheme_end >= 0) {
+        is_https = s.startsWith("https://");
+        s = s.substring(scheme_end + 3);
+    }
+    // Strip path / query — we only need host[:port].
+    int slash = s.indexOf('/');
+    if (slash >= 0) s = s.substring(0, slash);
+
+    int colon = s.indexOf(':');
+    if (colon >= 0) {
+        out_host = s.substring(0, colon);
+        long p = s.substring(colon + 1).toInt();
+        if (p <= 0 || p > 65535) return false;
+        out_port = (uint16_t)p;
+    } else {
+        out_host = s;
+        out_port = is_https ? 443 : 80;
+    }
+    return out_host.length() > 0;
+}
+
+}  // namespace
+
 // Kick off an SNTP sync against the configured NTP server with the
 // configured POSIX timezone. configTime() is non-blocking — the IDF's
 // SNTP client runs the actual exchange in the background and updates
@@ -275,12 +325,23 @@ ConnectivityTier WiFiManager::getConnectivityTier() {
     bool ha_ok = isReachable(jarvis::config::kHaHostDefault,
                              jarvis::config::kHaPortDefault,
                              jarvis::config::kHaProbeMs);
-    bool oc_ok = isReachable(jarvis::config::kOpenclawProbeHost,
-                             jarvis::config::kOpenclawPortDefault,
+    // OC probe target follows the user's `oc_host` NVS setting so the
+    // tier reflects the live agent endpoint, not a stale default. Falls
+    // back to the compile-time constants only when NVS is unset (fresh
+    // device, pre-provisioning).
+    String oc_url = jarvis::NVSConfig::getOcHost();
+    String oc_host;
+    uint16_t oc_port;
+    if (oc_url.length() == 0 || !parseHostPort(oc_url, oc_host, oc_port)) {
+        oc_host = jarvis::config::kOpenclawProbeHost;
+        oc_port = jarvis::config::kOpenclawPortDefault;
+    }
+    bool oc_ok = isReachable(oc_host.c_str(), oc_port,
                              jarvis::config::kOpenclawProbeMs);
-    Serial.printf("[WIFI] probe: HA=%s OC=%s\n",
+    Serial.printf("[WIFI] probe: HA=%s OC=%s (target=%s:%u)\n",
                   ha_ok ? "ok" : "down",
-                  oc_ok ? "ok" : "down");
+                  oc_ok ? "ok" : "down",
+                  oc_host.c_str(), (unsigned)oc_port);
     if (ha_ok && oc_ok) {
         g_tier_cached = ConnectivityTier::LAN;          // full mesh
     } else if (oc_ok) {
