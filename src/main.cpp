@@ -265,6 +265,20 @@ void setup() {
 
     Serial.printf("[READY] Say \"%s\" to wake.\n", jarvis::config::kWakeWord);
 
+    // Memory snapshot at end of setup() — printed AFTER ~30s of slow
+    // module-LLM init, so the host's serial monitor has long since
+    // reconnected past the USB-CDC reset window. The earlier [BOOT]
+    // print (line ~129) gets swallowed by the reconnect; this one is
+    // the one you actually see. Compare against the same print emitted
+    // by TtsClient on alloc failure to localize where PSRAM goes.
+    Serial.printf("[READY] mem psram_size=%u free_psram=%u largest_psram_block=%u "
+                  "free_heap=%u largest_heap_block=%u\n",
+                  (unsigned)ESP.getPsramSize(),
+                  (unsigned)ESP.getFreePsram(),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+
     // Hardware watchdog: panics + reboots if loop() goes silent for
     // longer than kWatchdogTimeoutSec. The single source of truth for
     // "we're alive" is reaching the top of loop() — an HTTP/UART hang
