@@ -164,8 +164,12 @@ constexpr const char* kTtsElevenPathBase = "/v1/text-to-speech/";
 // the buffered MVP just downloads the whole MP3 then plays.
 constexpr uint32_t kTtsHttpTimeoutMs = 15000;
 // Cap downloaded MP3 size to avoid runaway. ~30 KB ≈ 10 s of speech at
-// 24 kbps; 120 KB gives ~40 s headroom for verbose Claude replies.
-constexpr size_t   kTtsMaxMp3Bytes   = 120 * 1024;
+// 24 kbps; 64 KB gives ~22 s headroom which covers anything LLMClient
+// (max_tokens=80) can produce. Lowered from 120 KB because gpt-4o-mini-tts
+// streams chunked (no Content-Length header) so the downloader allocates
+// the full cap up-front — and a 120 KB request fails on devices with
+// fragmented PSRAM even though there's plenty of free memory in aggregate.
+constexpr size_t   kTtsMaxMp3Bytes   = 64 * 1024;
 
 // ── OTA (PLAN.md Phase 7) ─────────────────────────────────────────────────
 // LAN-side ArduinoOTA mDNS hostname — appears as "jarvis.local" in the
