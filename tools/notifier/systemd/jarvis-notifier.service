@@ -45,7 +45,11 @@ RestartSec=5
 # itself is committable.
 ReadWritePaths=/var/lib/jarvis-notifier
 ProtectSystem=strict
-ProtectHome=true
+# `read-only` (not `true`) so the service can still exec the venv
+# binary at /home/<user>/Project-Jarvis/tools/notifier/.venv/bin/python.
+# `true` makes /home completely invisible to the service — which yields
+# status=203/EXEC because systemd can't even see the interpreter.
+ProtectHome=read-only
 PrivateTmp=true
 NoNewPrivileges=true
 StandardOutput=journal
