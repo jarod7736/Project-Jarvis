@@ -11,6 +11,7 @@
 #include <Arduino.h>
 #include <LittleFS.h>
 #include <M5Unified.h>
+#include <esp_heap_caps.h>
 #include <esp_task_wdt.h>
 
 #include "app/IntentRouter.h"
@@ -115,6 +116,23 @@ void setup() {
     delay(200);
     Serial.println();
     Serial.println("=== Project Jarvis — Phase 2 voice loop ===");
+
+    // PSRAM health probe. Printed unconditionally so it survives the
+    // USB-CDC reset-reconnect window — by the time the user's serial
+    // monitor reattaches, the early IDF psramInit() messages are
+    // already gone but this line runs late enough in setup() to be
+    // captured. Expected on CoreS3: psram_size=8388608 (8 MB) and
+    // free_psram close to that. free_psram=0 with psram_size>0 means
+    // PSRAM initialized but something has consumed all of it (rare,
+    // points to a leak). psram_size=0 means PSRAM never came up —
+    // a build/board-config bug.
+    Serial.printf("[BOOT] psram_size=%u free_psram=%u largest_psram_block=%u "
+                  "free_heap=%u largest_heap_block=%u\n",
+                  (unsigned)ESP.getPsramSize(),
+                  (unsigned)ESP.getFreePsram(),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
     // Power-stack sanity: if the AXP2101 isn't being driven by M5Unified
     // (board mis-detected, i2c bus busy, etc.) all our M5.Power calls
