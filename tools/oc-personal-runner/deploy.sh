@@ -16,7 +16,7 @@ PROJECT_ROOT="$(cd "${PKG_DIR}/../.." && pwd)"
 BRAIN_MCP_DIR="${PROJECT_ROOT}/tools/brain-mcp"
 
 LISTEN_PORT="${OC_LISTEN_PORT:-8080}"
-LMSTUDIO_URL="${OC_LMSTUDIO_URL:-http://192.168.1.108:1234}"
+BACKEND_URL="${OC_BACKEND_URL:-http://192.168.1.108:11434}"
 VENV_DIR="${VENV_DIR:-${PKG_DIR}/.venv}"
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 SECRETS_FILE="${OC_SECRETS_FILE:-/etc/oc-personal/secrets.env}"
@@ -46,7 +46,7 @@ cmd_survey() {
     info "Runner pkg dir:      ${PKG_DIR}"
     info "Venv target:         ${VENV_DIR}"
     info "Listen port:         ${LISTEN_PORT}"
-    info "LM Studio passthru:  ${LMSTUDIO_URL}"
+    info "Backend passthru:    ${BACKEND_URL}"
     info "Secrets file:        ${SECRETS_FILE}"
 
     header "Prerequisites"
@@ -174,7 +174,7 @@ cmd_install() {
         sed -e "s|__RUN_USER__|${RUN_USER}|g" \
             -e "s|__PROJECT_ROOT__|${PROJECT_ROOT}|g" \
             -e "s|__USER_HOME__|${user_home}|g" \
-            -e "s|^Environment=OC_LMSTUDIO_URL=.*|Environment=OC_LMSTUDIO_URL=${LMSTUDIO_URL}|" \
+            -e "s|^Environment=OC_BACKEND_URL=.*|Environment=OC_BACKEND_URL=${BACKEND_URL}|" \
             -e "s|^Environment=OC_LISTEN_PORT=.*|Environment=OC_LISTEN_PORT=${LISTEN_PORT}|" \
             -e "s|^EnvironmentFile=.*|EnvironmentFile=-${SECRETS_FILE}|" \
             "${svc_src}" > "${svc_tmp}"
@@ -241,13 +241,13 @@ cmd_test() {
     ok "oc-personal chat completion OK"
     echo
 
-    info "POST ${base}/v1/chat/completions  (model=google/gemma-4-e4b — proxied to LM Studio)"
-    info "If LM Studio at ${LMSTUDIO_URL} is reachable, expect a real reply."
+    info "POST ${base}/v1/chat/completions  (model=gemma4:e4b — proxied to backend)"
+    info "If the backend at ${BACKEND_URL} is reachable, expect a real reply."
     info "If not, expect a proxy-error response (still 200, with 'upstream:' message)."
     echo
     curl -fsS -X POST "${base}/v1/chat/completions" \
         -H 'Content-Type: application/json' \
-        -d '{"model":"google/gemma-4-e4b","messages":[{"role":"user","content":"hi"}],"max_tokens":20}' \
+        -d '{"model":"gemma4:e4b","messages":[{"role":"user","content":"hi"}],"max_tokens":20}' \
         | python3 -m json.tool || true
     echo
     ok "proxy path exercised"

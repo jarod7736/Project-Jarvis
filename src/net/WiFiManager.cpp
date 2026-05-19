@@ -30,10 +30,10 @@ namespace {
 // empty host. Used by the tier probe so the reachability check follows
 // the user's actual `oc_host` setting rather than a stale compile-time
 // constant — previously the probe targeted kOpenclawProbeHost
-// (192.168.1.108:1234, LM Studio's default) even when the user had
-// migrated oc_host to a different machine like lobsterboy:8080. That
-// mismatch made getConnectivityTier() report HOTSPOT_ONLY whenever
-// LM Studio wasn't running on the original host, which in turn made
+// (192.168.1.108:1234, the original LM Studio default) even when the
+// user had migrated oc_host to a different machine like lobsterboy:8080.
+// That mismatch made getConnectivityTier() report HOTSPOT_ONLY whenever
+// the backend wasn't running on the original host, which in turn made
 // IntentRouter short-circuit personal_query / journal_note to
 // kErrPersonalOffline. Reading from NVS keeps the probe honest.
 bool parseHostPort(const String& url, String& out_host, uint16_t& out_port) {

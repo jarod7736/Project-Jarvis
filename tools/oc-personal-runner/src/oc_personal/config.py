@@ -18,14 +18,16 @@ LISTEN_PORT = int(os.environ.get("OC_LISTEN_PORT", "8080"))
 PERSONAL_MODEL = os.environ.get("OC_PERSONAL_MODEL", "oc-personal")
 
 # ── Pass-through target for non-personal models ─────────────────────────────
-# Where Jarvis used to point oc_host directly. Anything that isn't
-# PERSONAL_MODEL gets forwarded here unchanged.
-LMSTUDIO_URL = os.environ.get("OC_LMSTUDIO_URL", "http://192.168.1.108:1234")
-# Optional Bearer token forwarded as Authorization: Bearer <token>. LM Studio
-# added optional server-side token auth in a recent release; if your LM Studio
-# requires one, set LM_STUDIO_TOKEN in the EnvironmentFile. Empty string means
-# do not send an Authorization header.
-LMSTUDIO_TOKEN = os.environ.get("LM_STUDIO_TOKEN", "")
+# Any chat-completions request whose model != PERSONAL_MODEL gets forwarded
+# here unchanged. Provider-agnostic: works against any OpenAI-compat backend
+# (Ollama, LM Studio, vLLM, llama.cpp server). Default is Ollama's OpenAI
+# endpoint on the jarod-desktop LAN host.
+BACKEND_URL = os.environ.get("OC_BACKEND_URL", "http://192.168.1.108:11434")
+# Optional Bearer token. Some backends (LM Studio, vLLM) accept
+# server-side token auth; if your backend requires one, set
+# OC_BACKEND_TOKEN in the EnvironmentFile. Ollama ignores it. Empty
+# string means do not send an Authorization header.
+BACKEND_TOKEN = os.environ.get("OC_BACKEND_TOKEN", "")
 
 # ── Anthropic side ──────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

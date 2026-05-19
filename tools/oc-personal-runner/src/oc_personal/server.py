@@ -8,7 +8,7 @@ Deployment (lobsterboy):
 
     # Smoke test (foreground)
     ANTHROPIC_API_KEY=sk-ant-... \\
-    OC_LMSTUDIO_URL=http://192.168.1.108:1234 \\
+    OC_BACKEND_URL=http://192.168.1.108:11434 \\
     OC_BRAIN_MCP_COMMAND=/home/$USER/project-jarvis/tools/brain-mcp/.venv/bin/python \\
         .venv/bin/python -m oc_personal.server
 
@@ -39,7 +39,7 @@ import uvicorn
 
 from . import config
 from .agent import BrainAgent
-from .proxy import LMStudioProxy
+from .proxy import OpenAICompatProxy
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,7 +50,7 @@ log = logging.getLogger("oc_personal")
 
 # Module-level singletons populated in lifespan().
 agent: BrainAgent | None = None
-proxy: LMStudioProxy | None = None
+proxy: OpenAICompatProxy | None = None
 
 
 @asynccontextmanager
@@ -60,14 +60,14 @@ async def lifespan(_app: FastAPI):
         log.error("ANTHROPIC_API_KEY is not set; oc-personal calls will fail.")
 
     agent = BrainAgent()
-    proxy = LMStudioProxy()
+    proxy = OpenAICompatProxy()
     async with agent.lifecycle():
         log.info(
-            "ready: listening on %s:%d, personal_model=%s, lmstudio=%s",
+            "ready: listening on %s:%d, personal_model=%s, backend=%s",
             config.LISTEN_HOST,
             config.LISTEN_PORT,
             config.PERSONAL_MODEL,
-            config.LMSTUDIO_URL,
+            config.BACKEND_URL,
         )
         try:
             yield
@@ -87,7 +87,7 @@ async def healthz() -> dict[str, Any]:
         "status": "ok",
         "personal_model": config.PERSONAL_MODEL,
         "anthropic_model": config.ANTHROPIC_MODEL,
-        "lmstudio": config.LMSTUDIO_URL,
+        "backend": config.BACKEND_URL,
         "agent_ready": bool(agent and agent._sessions),
         "mcp_servers": sorted(agent._sessions.keys()) if agent else [],
         "tools": [t["name"] for t in (agent._tools_anthropic if agent else [])],
