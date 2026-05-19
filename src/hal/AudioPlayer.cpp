@@ -111,12 +111,14 @@ constexpr uint8_t  kVirtualChannel = 0;
 // resampler stretched playback and introduced amplitude loss.
 constexpr uint32_t kSampleRate     = 24000;
 // Gain multiplier applied by the MP3 decoder before samples reach the
-// speaker. OpenAI's `onyx` voice is naturally deep/low-amplitude; the
-// default 1.0 left it barely audible even at tts_volume=100. 2.5 lifts
-// the loudness floor without obvious clipping on conversational
-// content (verified by ear on test replies; pure tones at near-peak
-// may saturate — acceptable for voice).
-constexpr float    kDecoderGain    = 2.5f;
+// speaker. OpenAI's `onyx` voice is naturally deep/low-amplitude and
+// the CoreS3 onboard amp has a low ceiling, so even tts_volume=100
+// (M5.Speaker volume 255) leaves voice replies barely loud enough for
+// across-the-room hearing. 4.0 lifts the floor noticeably without
+// audible clipping on conversational voice. Pure-tone content or
+// very loud source material could saturate at this gain — acceptable
+// trade-off for everyday voice.
+constexpr float    kDecoderGain    = 4.0f;
 // Max time AudioPlayer::tick() may spend decoding per main-loop tick.
 // The main loop has ~30-50 ms of other work per iteration (display
 // refresh, MQTT keepalive, etc.); if we decode only one MP3 frame per
