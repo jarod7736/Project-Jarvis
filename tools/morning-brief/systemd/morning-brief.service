@@ -1,0 +1,29 @@
+[Unit]
+Description=Jarvis morning brief — ask oc-personal for ONE focus and push it
+After=oc-personal.service jarvis-notifier.service network-online.target
+Wants=network-online.target
+# Soft dependencies on the upstreams. If oc-personal or notifier are
+# down, the script logs and exits non-zero — journalctl shows the
+# failure on the timer's next status.
+
+[Service]
+Type=oneshot
+# __RUN_USER__ and __PROJECT_ROOT__ are sentinel placeholders that
+# deploy.sh substitutes at install time. The post-sed validator refuses
+# to install if any __FOO__ token survives.
+User=__RUN_USER__
+WorkingDirectory=__PROJECT_ROOT__/tools/morning-brief
+Environment=OC_PERSONAL_URL=http://localhost:8080
+Environment=OC_PERSONAL_MODEL=oc-personal
+Environment=NOTIFIER_URL=http://localhost:8081
+Environment=MORNING_BRIEF_TIER=high
+Environment=MORNING_BRIEF_SOURCE=morning-brief
+Environment=MORNING_BRIEF_TITLE=Today's focus
+# Override knobs (tier, prompt extras) via a drop-in:
+#   /etc/systemd/system/morning-brief.service.d/override.conf
+ExecStart=__PROJECT_ROOT__/tools/morning-brief/.venv/bin/python -m morning_brief.main
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=Fire the Jarvis morning brief at 08:00 local
+
+[Timer]
+# Local-time 08:00 every day. Adjust via drop-in:
+#   /etc/systemd/system/morning-brief.timer.d/override.conf
+# e.g. weekdays only:
+#   [Timer]
+#   OnCalendar=
+#   OnCalendar=Mon..Fri 08:00:00
+OnCalendar=*-*-* 08:00:00
+# Catch up if the host was off at fire time — within the same boot
+# window. Without this, an overnight reboot eats the day's brief.
+Persistent=true
+# Stagger a few seconds so we don't race oc-personal startup if the
+# whole stack boots together.
+RandomizedDelaySec=10
+Unit=morning-brief.service
+
+[Install]
+WantedBy=timers.target
