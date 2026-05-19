@@ -118,6 +118,23 @@ void tickStateMachine() {
 
     switch (g_state) {
         case DeviceState::IDLE: {
+            // Proactive speak (Sprint 1 reverse channel) takes top
+            // priority: the notifier on lobsterboy publishes here to
+            // deliver reminders / morning briefs / nudges, and the
+            // payload is the literal TTS string — no intent routing,
+            // no LLM, just speak it. Drained before command so a
+            // high-priority alert isn't held behind a queued directive.
+            String mqtt_speak = jarvis::net::MqttClient::popPendingSpeak();
+            if (mqtt_speak.length() > 0) {
+                Serial.printf("[FSM] mqtt speak: \"%s\"\n", mqtt_speak.c_str());
+                jarvis::hal::SdLogger::logExchange(
+                    "<push>", mqtt_speak,
+                    jarvis::net::tierName(jarvis::net::WiFiManager::getConnectivityTier()),
+                    /*latency_ms=*/0);
+                enterSpeaking(mqtt_speak);
+                break;
+            }
+
             // MQTT-pushed commands take priority over wake-word: if HA is
             // sending us a directive, we shouldn't make the user say
             // "HELLO" first. Skip LISTENING entirely and dispatch as if

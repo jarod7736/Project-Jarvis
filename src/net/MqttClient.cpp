@@ -29,6 +29,12 @@ uint32_t g_last_attempt_ms = 0;
 String g_pending_command;
 bool   g_pending_command_set = false;
 
+// Single-slot proactive-speak queue. Same semantics as the command queue
+// above. The notifier service on lobsterboy is responsible for the real
+// queue / backpressure — this is just the transport landing pad.
+String g_pending_speak;
+bool   g_pending_speak_set = false;
+
 // Build a stable-per-device client ID. PubSubClient requires unique IDs
 // across the broker; "jarvis" alone would collide if a future deployment
 // has multiple devices. Suffix with the last 6 hex chars of the WiFi MAC.
@@ -41,19 +47,29 @@ String buildClientId() {
 }
 
 void onMessage(char* topic, byte* payload, unsigned int len) {
-    // Topic dispatch. Today there's only the command topic; keep the
-    // structure so adding more later is straightforward.
-    if (strcmp(topic, jarvis::config::kMqttTopicCommand) == 0) {
-        // Copy out — PubSubClient reuses the payload buffer for the next
-        // message. Cap to 256 chars for sanity (transcripts are short).
+    // Topic dispatch. PubSubClient reuses the payload buffer for the next
+    // message, so we copy out before yielding control. Cap to 256 chars
+    // for sanity (transcripts and notification strings are short).
+    auto copyPayload = [&]() {
         size_t take = len > 256 ? 256 : len;
         String s;
         s.reserve(take);
         for (size_t i = 0; i < take; ++i) s += (char)payload[i];
+        return s;
+    };
+
+    if (strcmp(topic, jarvis::config::kMqttTopicCommand) == 0) {
+        String s = copyPayload();
         g_pending_command     = s;
         g_pending_command_set = true;
         Serial.printf("[MQTT] command received (%u bytes): \"%s\"\n",
-                      (unsigned)take, s.c_str());
+                      (unsigned)s.length(), s.c_str());
+    } else if (strcmp(topic, jarvis::config::kMqttTopicSpeak) == 0) {
+        String s = copyPayload();
+        g_pending_speak     = s;
+        g_pending_speak_set = true;
+        Serial.printf("[MQTT] speak received (%u bytes): \"%s\"\n",
+                      (unsigned)s.length(), s.c_str());
     } else {
         Serial.printf("[MQTT] unhandled topic: %s (%u bytes)\n",
                       topic, len);
@@ -104,6 +120,8 @@ bool tryConnect() {
     Serial.println("[MQTT] connected");
     g_mqtt.subscribe(jarvis::config::kMqttTopicCommand);
     Serial.printf("[MQTT] subscribed: %s\n", jarvis::config::kMqttTopicCommand);
+    g_mqtt.subscribe(jarvis::config::kMqttTopicSpeak);
+    Serial.printf("[MQTT] subscribed: %s\n", jarvis::config::kMqttTopicSpeak);
     return true;
 }
 
@@ -172,6 +190,14 @@ String MqttClient::popPendingCommand() {
     String out = g_pending_command;
     g_pending_command     = "";
     g_pending_command_set = false;
+    return out;
+}
+
+String MqttClient::popPendingSpeak() {
+    if (!g_pending_speak_set) return String();
+    String out = g_pending_speak;
+    g_pending_speak     = "";
+    g_pending_speak_set = false;
     return out;
 }
 

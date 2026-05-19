@@ -1,0 +1,55 @@
+[Unit]
+Description=jarvis-notifier — proactive output router for Project Jarvis
+After=network-online.target
+Wants=network-online.target
+# Soft dependency on the MQTT broker. We do not require it — paho retries
+# forever — but starting after it avoids noisy reconnect logs on boot.
+After=mosquitto.service
+
+[Service]
+Type=simple
+# __RUN_USER__ and __PROJECT_ROOT__ are sentinel placeholders that
+# deploy.sh substitutes at install time (see
+# tools/notifier/deploy.sh:cmd_install). This file is a template — the
+# post-sed validator in deploy.sh refuses to install if any __FOO__
+# token survives. Override other knobs via a drop-in
+# (/etc/systemd/system/jarvis-notifier.service.d/override.conf) rather
+# than editing this file. Pushover keys especially belong in an
+# EnvironmentFile= pointing at a 0600-permissioned env file, not here.
+User=__RUN_USER__
+WorkingDirectory=__PROJECT_ROOT__/tools/notifier
+Environment=NOTIFIER_LISTEN_HOST=0.0.0.0
+Environment=NOTIFIER_LISTEN_PORT=8081
+# Broker on the same host. If your broker is elsewhere, override here.
+Environment=NOTIFIER_MQTT_HOST=localhost
+Environment=NOTIFIER_MQTT_PORT=1883
+Environment=NOTIFIER_MQTT_CLIENT_ID=jarvis-notifier
+Environment=NOTIFIER_MQTT_TOPIC_SPEAK=jarvis/speak
+Environment=NOTIFIER_MQTT_TOPIC_STATE=jarvis/state
+Environment=NOTIFIER_STATE_DIR=/var/lib/jarvis-notifier
+Environment=NOTIFIER_QUEUE_MAX_DEPTH=100
+Environment=NOTIFIER_IDLE_DRAIN_DELAY_SEC=3
+# Secrets land here. Drop-in file with 0600 perms, owned by __RUN_USER__:
+#   /etc/jarvis-notifier/secrets.env
+# expected contents:
+#   NOTIFIER_MQTT_USER=jarvis
+#   NOTIFIER_MQTT_PASS=...
+#   PUSHOVER_TOKEN=...
+#   PUSHOVER_USER_KEY=...
+EnvironmentFile=-/etc/jarvis-notifier/secrets.env
+ExecStart=__PROJECT_ROOT__/tools/notifier/.venv/bin/python -m jarvis_notifier.server
+Restart=on-failure
+RestartSec=5
+# Allow writes only to the state dir; everything else is read-only. The
+# Pushover token + MQTT password come from the env-file so the unit text
+# itself is committable.
+ReadWritePaths=/var/lib/jarvis-notifier
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
