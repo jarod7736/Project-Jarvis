@@ -82,22 +82,30 @@ constexpr const char* kTimezoneDefault = "CST6CDT,M3.2.0,M11.1.0";
 // (OpenClaw) add NVS overrides at keys `ha_host` and `oc_host`.
 constexpr const char* kHaHostDefault       = "pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa";
 constexpr uint16_t    kHaPortDefault       = 443;   // Nabu Casa cloud HTTPS
-// OpenClaw default points at LM Studio on jarod-desktop's LAN IP. The
-// canonical Tailscale URL (https://lobsterboy.tail1c66ec.ts.net) doesn't
-// resolve from the CoreS3 — the device isn't on Tailscale and the router's
-// DNS doesn't know *.ts.net. To use Tailscale, configure a subnet router.
-constexpr const char* kOpenclawHostDefault = "http://192.168.1.108:1234";
-// Tier probe needs bare host:port — parsed out of kOpenclawHostDefault.
-// Keep this in sync if the URL changes; URL parsing in C++ on Arduino isn't
-// worth the cost for a one-line constant.
-constexpr const char* kOpenclawProbeHost = "192.168.1.108";
-constexpr uint16_t    kOpenclawPortDefault = 1234;
+// OpenClaw default points at oc-personal-runner on lobsterboy's LAN IP.
+// The canonical Tailscale URL (https://lobsterboy.tail1c66ec.ts.net)
+// doesn't resolve from the CoreS3 — the device isn't on Tailscale and
+// the router's DNS doesn't know *.ts.net. To use Tailscale, configure
+// a subnet router. Constants below are fallbacks only; the live values
+// live in NVS (oc_host) and the tier probe reads from there.
+constexpr const char* kOpenclawHostDefault = "http://192.168.1.178:8080";
+// Tier probe fallback — used only when NVS `oc_host` is unset (fresh
+// device). When `oc_host` is set, WiFiManager::getConnectivityTier()
+// parses host+port out of it directly.
+constexpr const char* kOpenclawProbeHost = "192.168.1.178";
+constexpr uint16_t    kOpenclawPortDefault = 8080;
 
 // ── OpenClaw model routing (PLAN.md Phase 6) ──────────────────────────────
-// User's OpenClaw runs LM Studio on jarod-desktop. Local model is
-// google/gemma-4-e4b. Claude model is TBD (not currently loaded — will
-// fail until configured); kept here so the routing structure is in place.
-constexpr const char* kOcLocalModel  = "google/gemma-4-e4b";
+// oc-personal-runner forwards any non-`oc-personal` model name to the
+// configured OpenAI-compat backend (env var OC_BACKEND_URL, default
+// Ollama at http://192.168.1.108:11434). The local model name below
+// must match a model the backend has loaded — for Ollama, the form is
+// `<name>:<tag>` as it appears in `ollama list`.
+constexpr const char* kOcLocalModel  = "gemma4:e4b";
+// Claude routing: when NVS `anth_key` is set, the "claude" intent
+// dispatches directly to Anthropic via AnthropicClient. Otherwise it
+// falls through to the backend with this model name — which the
+// backend may or may not recognize.
 constexpr const char* kOcClaudeModel = "claude-sonnet-4-6";  // TBD
 // Personal-mode model alias on OpenClaw — agent loop with brain-mcp
 // tools attached (PLAN.md Phase 8). Same /v1/chat/completions wire

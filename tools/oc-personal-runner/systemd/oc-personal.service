@@ -19,7 +19,7 @@ WorkingDirectory=__PROJECT_ROOT__/tools/oc-personal-runner
 # in the unit text — use EnvironmentFile= pointing at a 0600-permissioned env file.
 Environment=OC_LISTEN_HOST=0.0.0.0
 Environment=OC_LISTEN_PORT=8080
-Environment=OC_LMSTUDIO_URL=http://192.168.1.108:1234
+Environment=OC_BACKEND_URL=http://192.168.1.108:11434
 Environment=OC_PERSONAL_MODEL=oc-personal
 Environment=OC_ANTHROPIC_MODEL=claude-sonnet-4-6
 Environment=OC_MAX_TURNS=4
