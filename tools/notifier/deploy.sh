@@ -184,9 +184,13 @@ EOF
         -e "s|__PROJECT_ROOT__|${PROJECT_ROOT}|g" \
         "${unit_src}" > "${rendered}"
 
-    if grep -q '__[A-Z_]*__' "${rendered}"; then
+    # Refuse to install if any sentinel survives on a non-comment line.
+    # We strip `^\s*#` lines first because the documentation block at the
+    # top of the unit intentionally mentions __FOO__ as a literal example
+    # — and that would otherwise self-trigger.
+    if grep -vE '^\s*#' "${rendered}" | grep -qE '__[A-Z_]+__'; then
         fail "Unrendered placeholder(s) survived sed:"
-        grep -n '__[A-Z_]*__' "${rendered}"
+        grep -nE '__[A-Z_]+__' "${rendered}" | grep -vE ':\s*#' | sed 's/^/    /'
         rm -f "${rendered}"
         return 1
     fi
