@@ -114,6 +114,23 @@ bool NVSConfig::setTtsProvider(const String& provider) {
     return ok;
 }
 
+String NVSConfig::getTtsProactiveProvider() {
+    Preferences p;
+    p.begin(NS, true);
+    // 10-char key fits comfortably under the NS 15-char ceiling.
+    String s = p.getString("tts_proact", "");
+    p.end();
+    return s.length() ? s : String(jarvis::config::kTtsProactiveProviderDefault);
+}
+
+bool NVSConfig::setTtsProactiveProvider(const String& provider) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("tts_proact", provider) > 0;
+    p.end();
+    return ok;
+}
+
 String NVSConfig::getTtsVoiceId() {
     Preferences p;
     p.begin(NS, true);
@@ -510,6 +527,7 @@ static bool applyProvisioningJson(const JsonDocument& doc) {
     };
     static const StringField string_fields[] = {
         {"tts_provider", false, &NVSConfig::setTtsProvider},
+        {"tts_proact",   false, &NVSConfig::setTtsProactiveProvider},
         {"tts_voice_id", false, &NVSConfig::setTtsVoiceId},
         {"tts_api_key",  true,  &NVSConfig::setTtsApiKey},
         {"tts_model",    false, &NVSConfig::setTtsModel},

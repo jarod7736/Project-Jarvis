@@ -72,8 +72,16 @@ constexpr ConfigField kSchema[] = {
      true,  0, 0, 0, false, "", nullptr, 0},
 
     // ── TTS provider ────────────────────────────────────────────────────
-    {"tts_provider", "TTS Provider",       "network", FieldType::Enum,
+    // `tts_provider` drives conversational/response TTS — defaults to
+    // melotts (fast, on-device) to keep the turn-taking loop snappy.
+    // `tts_proact` drives proactive/notifier-push TTS — defaults to
+    // openai (richer voice) since the user isn't waiting on it. Both
+    // reuse the same voice id / model / api key / prosody hint below.
+    {"tts_provider", "TTS Provider (response)",  "network", FieldType::Enum,
      false, 0, 0, 0, false, "melotts",
+     kTtsProviderOptions, sizeof(kTtsProviderOptions) / sizeof(kTtsProviderOptions[0])},
+    {"tts_proact",   "TTS Provider (proactive)", "network", FieldType::Enum,
+     false, 0, 0, 0, false, "openai",
      kTtsProviderOptions, sizeof(kTtsProviderOptions) / sizeof(kTtsProviderOptions[0])},
     {"tts_voice_id", "TTS Voice ID",       "network", FieldType::String,
      false, 0, 0, 0, false, "onyx", nullptr, 0},

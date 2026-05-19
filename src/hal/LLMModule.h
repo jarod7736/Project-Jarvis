@@ -8,6 +8,15 @@ class HardwareSerial;
 
 namespace jarvis::hal {
 
+// Where a speak() call came from. Determines which NVS provider key the
+// internal TTS router consults — Response uses `tts_provider`
+// (conversational; defaults to melotts so the turn-taking loop stays
+// fast), while Proactive uses `tts_proact` (notifier pushes; defaults to
+// cloud so the user gets a richer voice on the asynchronous channel).
+// All other TTS knobs — voice id, model, api key, prosody instructions —
+// remain shared across both sources.
+enum class SpeakSource { Response, Proactive };
+
 // Phase 2 voice-loop wrapper around M5ModuleLLM.
 //
 // Replaces the bundled M5ModuleLLM_VoiceAssistant preset which doesn't work
@@ -47,7 +56,12 @@ public:
     // falls through to melotts on any error. The cloud path drives
     // on_speak_done_ via finishSpeaking() once AudioPlayer's onPlayDone
     // fires; melotts continues to use the millis()-based timer.
-    void speak(const String& text);
+    //
+    // `source` selects the provider routing: Response (default) consults
+    // `tts_provider`; Proactive consults `tts_proact`. See SpeakSource
+    // above for the rationale. The default keeps every existing call
+    // site unchanged.
+    void speak(const String& text, SpeakSource source = SpeakSource::Response);
 
     // Public hook for the cloud-TTS path: AudioPlayer's onPlayDone wires
     // through main.cpp to call this. Flips speaking_=false, fires

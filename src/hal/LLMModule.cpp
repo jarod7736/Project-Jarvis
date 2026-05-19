@@ -432,7 +432,7 @@ void LLMModule::update() {
     }
 }
 
-void LLMModule::speak(const String& text) {
+void LLMModule::speak(const String& text, SpeakSource source) {
     if (!ready_) return;
 
     // Guard against re-entry. The FSM should never call speak() while
@@ -445,14 +445,23 @@ void LLMModule::speak(const String& text) {
         return;
     }
 
-    Serial.printf("[LLMModule] speak(\"%s\") len=%u\n",
-                  text.c_str(), (unsigned)text.length());
+    const char* source_name =
+        (source == SpeakSource::Proactive) ? "PROACTIVE" : "RESPONSE";
+    Serial.printf("[LLMModule] speak(\"%s\") src=%s len=%u\n",
+                  text.c_str(), source_name, (unsigned)text.length());
 
     // Phase 7 cloud-TTS path. tts_provider != "melotts" + an api_key
     // present + AudioPlayer ready = try cloud first. Failure on any
     // step falls through to the melotts path below — no break in
     // user-facing behavior.
-    String tts_provider = jarvis::NVSConfig::getTtsProvider();
+    //
+    // Source-aware routing: Proactive reads `tts_proact` (notifier
+    // pushes can use a richer cloud voice because the user isn't
+    // waiting for a turn-taking reply); Response reads `tts_provider`.
+    // Everything else (voice id, model, api key, prosody) is shared.
+    String tts_provider = (source == SpeakSource::Proactive)
+        ? jarvis::NVSConfig::getTtsProactiveProvider()
+        : jarvis::NVSConfig::getTtsProvider();
     if (!tts_provider.equalsIgnoreCase("melotts") &&
         jarvis::net::TtsClient::isConfigured() &&
         jarvis::hal::AudioPlayer::ok()) {
