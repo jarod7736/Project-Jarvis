@@ -62,13 +62,17 @@ void enterTranscribing() {
     jarvis::net::MqttClient::publishState("THINKING");
 }
 
-void enterSpeaking(const String& text) {
+void enterSpeaking(const String& text,
+                   jarvis::hal::SpeakSource source = jarvis::hal::SpeakSource::Response) {
     g_state = DeviceState::SPEAKING;
     Display::setStatus(DeviceState::SPEAKING);
     Display::showResponse(text);
-    Serial.printf("[FSM] -> SPEAKING (\"%s\")\n", text.c_str());
+    Serial.printf("[FSM] -> SPEAKING (\"%s\") src=%s\n",
+                  text.c_str(),
+                  source == jarvis::hal::SpeakSource::Proactive ? "PROACTIVE"
+                                                                : "RESPONSE");
     jarvis::net::MqttClient::publishState("SPEAKING");
-    g_module->speak(text);
+    g_module->speak(text, source);
 }
 
 }  // namespace
@@ -131,7 +135,7 @@ void tickStateMachine() {
                     "<push>", mqtt_speak,
                     jarvis::net::tierName(jarvis::net::WiFiManager::getConnectivityTier()),
                     /*latency_ms=*/0);
-                enterSpeaking(mqtt_speak);
+                enterSpeaking(mqtt_speak, jarvis::hal::SpeakSource::Proactive);
                 break;
             }
 

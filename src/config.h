@@ -124,6 +124,16 @@ constexpr size_t   kOcMaxReplyChars = 400;
 // LLMModule::speak() checks `tts_provider == "melotts"` || `tts_api_key`
 // is empty and falls through to the on-device melotts path in that case.
 constexpr const char* kTtsProviderDefault = "melotts";
+// Proactive-channel TTS provider default (Sprint 1, follow-up to PR #42).
+// When a notifier push lands on jarvis/speak the FSM marks the speak()
+// call as Proactive; LLMModule::speak() then consults `tts_proact` in
+// NVS, falling back to this constant if unset. Latency isn't critical
+// on the proactive path (the user isn't waiting for a turn-taking reply),
+// so the default is "openai" — once `tts_api_key` is provisioned, the
+// cloud voice fires for proactive pushes automatically, while
+// conversational responses stay on `tts_provider` (melotts by default).
+// Set NVS `tts_proact` to "melotts" to force-local the proactive path.
+constexpr const char* kTtsProactiveProviderDefault = "openai";
 // Walken-adjacent presets per provider — see PLAN.md Phase 7 legal note
 // for why we don't ship a celebrity-clone voice ID. `onyx` is OpenAI's
 // deepest male voice and the closest stock match for the gravelly older-

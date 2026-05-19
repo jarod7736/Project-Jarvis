@@ -44,6 +44,14 @@ public:
     // the serial console (same security parity as ha_token / oc_key).
     static String getTtsProvider();
     static bool   setTtsProvider(const String& provider);
+    // Proactive-channel provider override (Sprint 1 follow-up). Read by
+    // LLMModule::speak() when source=SpeakSource::Proactive. Empty/unset
+    // falls back to config::kTtsProactiveProviderDefault ("openai"), so
+    // cloud TTS lights up automatically for proactive pushes the moment
+    // tts_api_key is provisioned — even if tts_provider is still
+    // "melotts". Set to "melotts" to force the proactive path local too.
+    static String getTtsProactiveProvider();
+    static bool   setTtsProactiveProvider(const String& provider);
     static String getTtsVoiceId();
     static bool   setTtsVoiceId(const String& voiceId);
     static String getTtsApiKey();
