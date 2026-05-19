@@ -105,7 +105,27 @@ private:
 
 // ── Player state ──────────────────────────────────────────────────────────
 constexpr uint8_t  kVirtualChannel = 0;
-constexpr uint32_t kSampleRate     = 96000;  // matches the M5 mp3 example
+// Match the OpenAI TTS MP3 output rate (24 kHz mono). The earlier
+// 96 kHz value was lifted from an M5Unified example that played higher-
+// rate source material; with a 4× mismatch the speaker driver's
+// resampler stretched playback and introduced amplitude loss.
+constexpr uint32_t kSampleRate     = 24000;
+// Gain multiplier applied by the MP3 decoder before samples reach the
+// speaker. OpenAI's `onyx` voice is naturally deep/low-amplitude; the
+// default 1.0 left it barely audible even at tts_volume=100. 2.5 lifts
+// the loudness floor without obvious clipping on conversational
+// content (verified by ear on test replies; pure tones at near-peak
+// may saturate — acceptable for voice).
+constexpr float    kDecoderGain    = 2.5f;
+// Max time AudioPlayer::tick() may spend decoding per main-loop tick.
+// The main loop has ~30-50 ms of other work per iteration (display
+// refresh, MQTT keepalive, etc.); if we decode only one MP3 frame per
+// tick the I2S DMA buffer drains faster than we refill it and audio
+// becomes jerky / stretched. Draining for up to 25 ms keeps us ahead
+// of playback while still leaving time for display animation. The
+// SPEAKING state is the only state that hits this branch, so other
+// loop work doesn't matter much during this window.
+constexpr uint32_t kDecodeBudgetMs = 25;
 
 bool                                  g_ok       = false;
 AudioOutputM5Speaker*                 g_out      = nullptr;
@@ -145,8 +165,13 @@ bool AudioPlayer::begin() {
         Serial.println("[AudioPlayer] alloc AudioOutputM5Speaker failed");
         return false;
     }
-    Serial.printf("[AudioPlayer] ready (sample_rate=%u, vch=%u)\n",
-                  (unsigned)kSampleRate, (unsigned)kVirtualChannel);
+    // Boost decoder output so low-amplitude voices (onyx etc.) reach a
+    // usable level. SetGain multiplies each sample before output —
+    // applied here once at init so every track inherits it.
+    g_out->SetGain(kDecoderGain);
+    Serial.printf("[AudioPlayer] ready (sample_rate=%u, vch=%u, gain=%.1f)\n",
+                  (unsigned)kSampleRate, (unsigned)kVirtualChannel,
+                  (double)kDecoderGain);
     g_ok = true;
 
     // Pick up the NVS-stored volume immediately. Default is 70 (per
@@ -214,13 +239,24 @@ bool AudioPlayer::isPlaying() {
 void AudioPlayer::tick() {
     if (!g_running || !g_mp3) return;
     if (g_mp3->isRunning()) {
-        if (!g_mp3->loop()) {
-            // loop() returns false on natural end-of-stream OR a fatal
-            // decoder error. Treat both as "done" — fire callback,
-            // tear down. Distinguishing them isn't useful here; the
-            // FSM transitions out of SPEAKING either way.
-            g_mp3->stop();
-            // Fall through to the done branch.
+        // Drain multiple MP3 frames per tick up to kDecodeBudgetMs.
+        // One frame per main-loop tick is too slow: the loop spends
+        // 30-50 ms on display / MQTT / WiFi between AudioPlayer ticks
+        // and the I2S DMA buffer drains in less than that, producing
+        // jerky / stretched playback. Running until the deadline gives
+        // the decoder enough bandwidth to stay ahead of consumption.
+        uint32_t deadline = millis() + kDecodeBudgetMs;
+        while (g_mp3->isRunning() &&
+               (int32_t)(deadline - millis()) > 0) {
+            if (!g_mp3->loop()) {
+                // loop() returns false on natural end-of-stream OR a
+                // fatal decoder error. Treat both as "done" — fire
+                // callback, tear down. Distinguishing them isn't
+                // useful here; the FSM transitions out of SPEAKING
+                // either way.
+                g_mp3->stop();
+                break;
+            }
         }
     }
     if (!g_mp3->isRunning()) {
