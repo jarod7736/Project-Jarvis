@@ -85,6 +85,16 @@ constexpr ConfigField kSchema[] = {
      kTtsProviderOptions, sizeof(kTtsProviderOptions) / sizeof(kTtsProviderOptions[0])},
     {"tts_voice_id", "TTS Voice ID",       "network", FieldType::String,
      false, 0, 0, 0, false, "onyx", nullptr, 0},
+    // `tts_model` selects the provider-side model. OpenAI options:
+    //   tts-1            — cheapest, fastest, ignores `tts_instr`
+    //   tts-1-hd         — higher quality, ignores `tts_instr`
+    //   gpt-4o-mini-tts  — newer; the only model that honors `tts_instr`
+    //                      (the prosody hint). Slightly slower first byte.
+    // ElevenLabs options live under their own naming (eleven_turbo_v2_5,
+    // eleven_multilingual_v2, etc.) — free-text, not enum, because the
+    // catalog changes faster than firmware does.
+    {"tts_model",    "TTS Model",          "network", FieldType::String,
+     false, 0, 0, 0, false, "tts-1", nullptr, 0},
     {"tts_api_key",  "TTS API Key",        "network", FieldType::String,
      true,  0, 0, 0, false, "", nullptr, 0},
     {"tts_instr",    "TTS Prosody Hint",   "network", FieldType::String,
