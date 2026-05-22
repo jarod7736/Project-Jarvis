@@ -102,9 +102,9 @@ constexpr uint16_t    kOpenclawPortDefault = 8080;
 // must match a model the backend has loaded — for Ollama, the form is
 // `<name>:<tag>` as it appears in `ollama list`.
 // Switched off gemma4:e4b after it returned philosophical word-salad
-// (responses starting with `]` to plain weather queries). gemma3:e4n
+// (responses starting with `]` to plain weather queries). gemma3n:e4b
 // follows the OpenAI-compat chat schema cleanly on Ollama.
-constexpr const char* kOcLocalModel  = "gemma3:e4n";
+constexpr const char* kOcLocalModel  = "gemma3n:e4b";
 // Claude routing: when NVS `anth_key` is set, the "claude" intent
 // dispatches directly to Anthropic via AnthropicClient. Otherwise it
 // falls through to the backend with this model name — which the
