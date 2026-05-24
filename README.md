@@ -36,7 +36,7 @@ Mic (LLM Module)
       ├── Personal query       → 2nd Brain RAG via oc-personal (lobsterboy)
       └── Journal note         → 2nd Brain capture via oc-personal (lobsterboy)
   → Response text → CoreS3
-  → TTS (LLM Module melotts, or cloud TTS in Phase 7) — spoken output
+  → TTS — cloud (OpenAI / ElevenLabs) by default, melotts on the LLM Module as fallback
   → CoreS3 display — shows transcript, status, readable data
 ```
 
@@ -142,27 +142,41 @@ Detailed per-phase design, retros, and validation gates live in [`PLAN.md`](PLAN
 ### Phase 6 — OpenClaw / Local LLM Integration ✅
 
 - [x] Implement OpenAI-compatible HTTP client on CoreS3 (`net/LLMClient.cpp`)
-- [x] Route complex queries to OpenClaw endpoint (gemma-4-e4b via LM Studio)
+- [x] Provider-agnostic local backend — Ollama by default (PR #49), LM Studio still supported via NVS `oc_host`; `LM_STUDIO_TOKEN` forwarded as Bearer on passthrough (PR #37)
 - [x] Direct Anthropic API fallback for the `claude` intent on HOTSPOT_ONLY tier
-- [ ] Streaming responses (deferred — Phase 7 enhancement)
+- [ ] Streaming responses (deferred indefinitely — not blocking)
 
-### Phase 7 — Polish & Reliability (in progress)
+### Phase 7 — Polish & Reliability ✅ (closed for hardware-validation purposes)
+
+See [`plans/phase7-validation.md`](plans/phase7-validation.md) for the gate-by-gate validation log.
 
 - [x] SD card logging (query/response pairs with timestamps)
-- [ ] Cloud TTS routing with custom voice (OpenAI / ElevenLabs), melotts fallback for offline tier
-- [x] MQTT integration alongside HA REST
-- [x] OTA firmware update support (LAN ArduinoOTA + remote `update_fw` voice intent)
-- [ ] Graceful degradation testing across all connectivity tiers
+- [x] Cloud TTS routing — OpenAI / ElevenLabs via `net/TtsClient` + `hal/AudioPlayer`, melotts fallback. Per-source provider routing for proactive pushes (PR #43). Quality/PSRAM fixes in PRs #50/#52–#57.
+- [x] MQTT integration alongside HA REST (`net/MqttClient`) — `jarvis/state`, `jarvis/command`, `jarvis/speak` (reverse channel for proactive pushes)
+- [x] OTA firmware update support (LAN ArduinoOTA + remote `update_fw` voice intent, `net/OtaService`)
+- [x] Hardware watchdog (30s, panic on expire)
+- [x] Validation gates 1, 2, 3, 6a, 6d ✅; gates 4, 5, 7 (cloud-TTS happy path, fallback, 24h soak) and rows 6b/c/e/f deferred with rationale in the tracker
 - [ ] Enclosure / mounting solution
 
-### Phase 8 — 2nd Brain Integration ✅
+### Phase 8 — 2nd Brain Integration ✅ (closed for hardware-validation purposes)
 
-- [x] Spec phase 8 in PLAN.md (PR #24)
-- [x] Firmware: `personal_query` and `journal_note` intents + `kOcPersonalModel` + `kErrPersonalOffline` (PR #25)
-- [x] `tools/brain-mcp/` Python MCP server with `brain_search` / `brain_capture` / `brain_lint` / `brain_ingest_status` (PR #26)
-- [x] `tools/oc-personal-runner/` FastAPI service: agent loop with Claude + brain-mcp tools, proxies non-personal models to LM Studio (PR #27)
-- [ ] Deploy on lobsterboy and validate end-to-end against the live vault
-- [ ] Repoint Jarvis NVS `oc_host` at the runner
+See [`plans/phase8-2nd-brain-validation.md`](plans/phase8-2nd-brain-validation.md).
+
+- [x] Firmware: `personal_query`, `journal_note`, calendar/email intents (PRs #25, #36) + `kOcPersonalModel` + `kErrPersonalOffline`
+- [x] `tools/brain-mcp/` — Python MCP server, 6-tool catalog (`brain_search`, `brain_capture`, `brain_lint`, `brain_list_projects`, `brain_set_next_action`, `brain_ingest_status`)
+- [x] `tools/google-mcp/` — Gmail + Calendar MCP, 6-tool catalog
+- [x] `tools/oc-personal-runner/` — FastAPI multi-MCP agent (12 tools total), proxies non-personal models to local backend
+- [x] Deployed on lobsterboy; Jarvis NVS `oc_host` repointed at the runner
+- [x] Validation gates 1–6 ✅; gate 7 (OFFLINE tier real-device break) and gates 8–10 (ingest / lint / sync-collision) deferred
+
+### Post-Phase 8 — Sprint 1 / Sprint 2 features (active)
+
+- [x] **Notifier service** — 3-tier priority router on lobsterboy:8081 (`tools/notifier/`), high pushes via MQTT `jarvis/speak` + Pushover, medium queues to disk and drains on next IDLE (Sprint 1 #1, #14, PR #41)
+- [x] **On-device Settings screen** — brightness / volume / mic-gain sliders (PR #41)
+- [x] **Morning brief** — scheduled 08:00 focus brief via `oc-personal` + `brain_list_projects` + `gcal_list_events` (`tools/morning-brief/`, Sprint 2 #2, PR #44)
+- [x] Morning brief stale-resurface — biases focus toward projects whose `next_action` hasn't moved in 7+ days (Sprint 2 #10, PR #47)
+- [x] Multi-MCP runner (brain + google) (PRs #34, #35) + project-tracking tools (PR #33)
+- [x] Calendar / email / project utterances routed to `personal_query` (PR #36)
 
 -----
 
@@ -185,22 +199,25 @@ External:
 - [M5Module-LLM Arduino API](https://docs.m5stack.com/en/stackflow/module_llm/arduino_api)
 - [LLM Module JSON API](https://docs.m5stack.com/en/stackflow/module_llm/api)
 - [CoreS3 Docs](https://docs.m5stack.com/en/core/CoreS3)
-- OpenClaw endpoint: `https://lobsterboy.tail1c66ec.ts.net` (Phase 8 oc-personal-runner)
+- OpenClaw endpoint (LAN): `http://192.168.1.178:8080` — the device path. Tailscale fallback: `https://lobsterboy.tail1c66ec.ts.net`.
 - HA Nabu Casa: `pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa`
 
 In-tree:
 
 - [`PLAN.md`](PLAN.md) — phase-by-phase design, retros, NVS schema, error taxonomy, known pitfalls
 - [`CLAUDE.md`](CLAUDE.md) — invariants for AI/agent contributors
-- [`docs/reference/`](docs/reference/) — version-pinned local copies of M5Stack / AX630C reference material
-- [`tools/brain-mcp/`](tools/brain-mcp/) — Python MCP server exposing the 2nd Brain wiki to OpenClaw
-- [`tools/oc-personal-runner/`](tools/oc-personal-runner/) — FastAPI front for the `oc-personal` model alias
+- [`plans/phase7-validation.md`](plans/phase7-validation.md) + [`plans/phase8-2nd-brain-validation.md`](plans/phase8-2nd-brain-validation.md) — hardware validation gates + results
+- [`tools/brain-mcp/`](tools/brain-mcp/) — 2nd Brain MCP server (6 tools)
+- [`tools/google-mcp/`](tools/google-mcp/) — Gmail + Calendar MCP server (6 tools)
+- [`tools/oc-personal-runner/`](tools/oc-personal-runner/) — FastAPI multi-MCP agent runner; OpenAI-compat front for `oc-personal`
+- [`tools/notifier/`](tools/notifier/) — proactive push service with priority router
+- [`tools/morning-brief/`](tools/morning-brief/) — scheduled 08:00 brief
 - [`tools/provision-wifi.py`](tools/provision-wifi.py) — first-run NVS provisioning over USB Serial
 
 -----
 
 ## Status
 
-**Current state:** Phases 1–6 hardware-validated end-to-end. Phase 8 (2nd Brain integration) landed across PRs #24/#25/#26/#27 and is awaiting deploy on lobsterboy. Phase 7 polish (cloud TTS, degradation matrix, enclosure) is the remaining open thread.
+**Current state:** Phases 1–8 shipped and "closed for hardware-validation purposes" per the per-phase trackers in `plans/`. Active work is Sprint 1/2 proactive-output features (notifier, morning brief, settings screen) — see commit log for the live frontier.
 
-**Next action:** Deploy `tools/oc-personal-runner/` on lobsterboy via its `deploy.sh`, repoint Jarvis NVS `oc_host` at the runner, validate `"what do I know about kettlebells"` and `"note that I called the plumber"` end-to-end on hardware.
+**Open threads:** Phase 7 deferred gates (24-hour soak, cloud-TTS happy-path + fallback formal validation), Phase 8 deferred gates (OFFLINE-tier guard on real device, `brain_ingest` / `brain_lint` / sync-collision), enclosure. Tracked in agentos.
