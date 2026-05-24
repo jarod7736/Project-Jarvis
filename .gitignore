@@ -21,3 +21,9 @@ docs/
 # of the firmware build).
 platform-tools/
 platform-tools-*.zip
+
+# Not an npm project — guard against tools accidentally seeding node tooling
+# at the repo root.
+node_modules/
+package.json
+package-lock.json
