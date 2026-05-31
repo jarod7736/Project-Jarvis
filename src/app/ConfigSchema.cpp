@@ -46,7 +46,7 @@ constexpr EnumOption kTtsProviderOptions[] = {
 constexpr ConfigField kSchema[] = {
     // ── Audio ───────────────────────────────────────────────────────────
     {"tts_volume",   "TTS Volume",         "audio",   FieldType::Int,
-     false, 0, 100, 70, false, nullptr,  nullptr, 0},
+     false, 0, 100, 100, false, nullptr,  nullptr, 0},
     {"wake_sens",    "Wake Sensitivity",   "audio",   FieldType::Int,
      false, 1,  10,  5, false, nullptr,  nullptr, 0},
     {"mic_gain",     "Mic Gain",           "audio",   FieldType::Int,

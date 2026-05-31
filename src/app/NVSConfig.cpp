@@ -307,7 +307,7 @@ bool NVSConfig::setAnthModel(const String& model) {
 
 int NVSConfig::getTtsVolume() {
     Preferences p; p.begin(NS, true);
-    int v = p.getInt("tts_volume", 70);
+    int v = p.getInt("tts_volume", 100);
     p.end();
     return v;
 }

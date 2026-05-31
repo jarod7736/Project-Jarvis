@@ -13,6 +13,15 @@ namespace jarvis::hal {
 
 namespace {
 
+// Per-chunk loudness normalization constants (used by AudioOutputM5Speaker::flush).
+// TTS voices (especially `onyx`) sit around -18 to -23 LUFS — 7–13 dB quieter
+// than music content. A flat decoder gain (ESP8266Audio's SetGain / Amplify)
+// is never applied by our ConsumeSample, so we normalize at flush() time
+// instead. kNormPeak is the target peak per 32-ms chunk; kMaxBoost caps the
+// multiplier so near-silent chunks (pauses) are not boosted into noise.
+constexpr int16_t kNormPeak = 29000;  // ~88 % of int16_t max
+constexpr float   kMaxBoost = 8.0f;   // cap at +18 dB
+
 // ── Custom AudioOutput → M5.Speaker bridge ────────────────────────────────
 // Pattern lifted from M5Unified's MP3_with_ESP8266Audio example. Decoded
 // PCM samples (stereo int16) are buffered in a triple buffer and pushed
@@ -38,6 +47,27 @@ public:
 
     void flush() override {
         if (idx_ == 0) return;
+        // Per-chunk loudness normalization. TTS voices sit 7–13 dB below
+        // music content; boosting each 32-ms chunk to kNormPeak target
+        // compensates without flat-gain clipping. kMaxBoost caps the
+        // multiplier so pauses (peak ≈ 0–200) stay quiet instead of
+        // being amplified into audible noise.
+        int16_t peak = 1;
+        for (size_t i = 0; i < idx_; ++i) {
+            int16_t v = buf_[bank_][i];
+            if (v < 0) v = -v;
+            if (v > peak) peak = v;
+        }
+        if (peak < kNormPeak) {
+            float boost = static_cast<float>(kNormPeak) / peak;
+            if (boost > kMaxBoost) boost = kMaxBoost;
+            for (size_t i = 0; i < idx_; ++i) {
+                int32_t s = static_cast<int32_t>(buf_[bank_][i] * boost);
+                buf_[bank_][i] = s > 32767 ? 32767
+                               : s < -32767 ? -32767
+                               : static_cast<int16_t>(s);
+            }
+        }
         spk_->playRaw(buf_[bank_], idx_, hertz, /*stereo=*/true,
                       /*repeat=*/1, vch_);
         bank_ = (bank_ + 1) % 3;
@@ -110,15 +140,6 @@ constexpr uint8_t  kVirtualChannel = 0;
 // rate source material; with a 4× mismatch the speaker driver's
 // resampler stretched playback and introduced amplitude loss.
 constexpr uint32_t kSampleRate     = 24000;
-// Gain multiplier applied by the MP3 decoder before samples reach the
-// speaker. OpenAI's `onyx` voice is naturally deep/low-amplitude and
-// the CoreS3 onboard amp has a low ceiling, so even tts_volume=100
-// (M5.Speaker volume 255) leaves voice replies barely loud enough for
-// across-the-room hearing. 4.0 lifts the floor noticeably without
-// audible clipping on conversational voice. Pure-tone content or
-// very loud source material could saturate at this gain — acceptable
-// trade-off for everyday voice.
-constexpr float    kDecoderGain    = 4.0f;
 // Max time AudioPlayer::tick() may spend decoding per main-loop tick.
 // The main loop has ~30-50 ms of other work per iteration (display
 // refresh, MQTT keepalive, etc.); if we decode only one MP3 frame per
@@ -155,7 +176,14 @@ bool AudioPlayer::begin() {
     // speaker on every CoreS3 firmware revision. Calling begin() again
     // is harmless if it's already up.
     auto cfg = M5.Speaker.config();
-    cfg.sample_rate = kSampleRate;
+    cfg.sample_rate      = kSampleRate;
+    // Pin the I2S background task to Core 1 (APP_CPU). Default (~0) lets
+    // the scheduler assign it to either core; on ESP32-S3, Core 0 hosts
+    // WiFi/BT protocol tasks at priority 23, which preempt the I2S task
+    // (priority 2) and cause micro-dropouts audible as crackling / reduced
+    // perceived loudness during SPEAKING. Pinning to Core 1 keeps I2S
+    // isolated from the WiFi task scheduler entirely.
+    cfg.task_pinned_core = 1;
     M5.Speaker.config(cfg);
     if (!M5.Speaker.begin()) {
         Serial.println("[AudioPlayer] M5.Speaker.begin failed");
@@ -167,13 +195,9 @@ bool AudioPlayer::begin() {
         Serial.println("[AudioPlayer] alloc AudioOutputM5Speaker failed");
         return false;
     }
-    // Boost decoder output so low-amplitude voices (onyx etc.) reach a
-    // usable level. SetGain multiplies each sample before output —
-    // applied here once at init so every track inherits it.
-    g_out->SetGain(kDecoderGain);
-    Serial.printf("[AudioPlayer] ready (sample_rate=%u, vch=%u, gain=%.1f)\n",
+    Serial.printf("[AudioPlayer] ready (sample_rate=%u, vch=%u norm_peak=%d max_boost=%.1f)\n",
                   (unsigned)kSampleRate, (unsigned)kVirtualChannel,
-                  (double)kDecoderGain);
+                  (int)kNormPeak, (double)kMaxBoost);
     g_ok = true;
 
     // Pick up the NVS-stored volume immediately. Default is 70 (per
