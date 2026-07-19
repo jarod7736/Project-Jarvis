@@ -19,15 +19,24 @@ PERSONAL_MODEL = os.environ.get("OC_PERSONAL_MODEL", "oc-personal")
 
 # ── Pass-through target for non-personal models ─────────────────────────────
 # Any chat-completions request whose model != PERSONAL_MODEL gets forwarded
-# here unchanged. Provider-agnostic: works against any OpenAI-compat backend
-# (Ollama, LM Studio, vLLM, llama.cpp server). Default is Ollama's OpenAI
-# endpoint on the jarod-desktop LAN host.
-BACKEND_URL = os.environ.get("OC_BACKEND_URL", "http://192.168.1.108:11434")
-# Optional Bearer token. Some backends (LM Studio, vLLM) accept
-# server-side token auth; if your backend requires one, set
-# OC_BACKEND_TOKEN in the EnvironmentFile. Ollama ignores it. Empty
-# string means do not send an Authorization header.
+# here (model name optionally rewritten, see PROXY_FORCE_MODEL below).
+# Provider-agnostic: works against any OpenAI-compat backend (Lemonade,
+# Ollama, LM Studio, vLLM, llama.cpp server). Default is Lemonade on the
+# amd-halo box, reachable over the tailnet.
+BACKEND_URL = os.environ.get("OC_BACKEND_URL", "http://amd-halo:13305")
+# Optional Bearer token. Lemonade requires an API key; set
+# OC_BACKEND_TOKEN in the EnvironmentFile (/etc/oc-personal/secrets.env).
+# Ollama ignores it. Empty string means do not send an Authorization
+# header.
 BACKEND_TOKEN = os.environ.get("OC_BACKEND_TOKEN", "")
+
+# ── Proxy model override ────────────────────────────────────────────────────
+# If set, the proxy path rewrites the incoming model name to this value
+# before forwarding to BACKEND_URL. Lets us pin lobsterboy's pass-through
+# to a known-good backend model regardless of what the client requests —
+# the firmware still sends its baked-in kOcLocalModel name.
+# Empty string = forward whatever the client sent (legacy behavior).
+PROXY_FORCE_MODEL = os.environ.get("OC_PROXY_FORCE_MODEL", "gpt-oss-120b-Q4_K_M")
 
 # ── Anthropic side ──────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

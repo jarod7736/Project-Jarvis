@@ -1,11 +1,13 @@
 """OpenAI-compat backend passthrough.
 
 Anything Jarvis sends with a model name other than `oc-personal` is
-forwarded verbatim to whichever OpenAI-compat backend is configured —
-currently Ollama, but any /v1/chat/completions speaker (LM Studio, vLLM,
-llama.cpp's server, etc.) works without code changes. Lets Jarvis treat
-lobsterboy as the only OpenClaw endpoint while a local-LLM box handles
-the gemma / general-chat routing.
+forwarded to whichever OpenAI-compat backend is configured — currently
+Lemonade on amd-halo, but any /v1/chat/completions speaker (Ollama,
+LM Studio, vLLM, llama.cpp's server, etc.) works without code changes.
+If PROXY_FORCE_MODEL is set, the model name is rewritten before
+forwarding; otherwise the request goes through verbatim. Lets Jarvis
+treat lobsterboy as the only OpenClaw endpoint while a local-LLM box
+handles the general-chat routing.
 
 Provider-agnostic naming so a future swap is one env-var change
 (`OC_BACKEND_URL`), not a code rename.
@@ -42,6 +44,8 @@ class OpenAICompatProxy:
 
     async def forward(self, request: dict[str, Any]) -> dict[str, Any]:
         """Forward a chat-completions request and return the backend's response."""
+        if config.PROXY_FORCE_MODEL:
+            request = {**request, "model": config.PROXY_FORCE_MODEL}
         try:
             resp = await self._client.post("/v1/chat/completions", json=request)
         except httpx.HTTPError as exc:

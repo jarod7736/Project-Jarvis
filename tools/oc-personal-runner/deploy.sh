@@ -16,7 +16,8 @@ PROJECT_ROOT="$(cd "${PKG_DIR}/../.." && pwd)"
 BRAIN_MCP_DIR="${PROJECT_ROOT}/tools/brain-mcp"
 
 LISTEN_PORT="${OC_LISTEN_PORT:-8080}"
-BACKEND_URL="${OC_BACKEND_URL:-http://192.168.1.108:11434}"
+BACKEND_URL="${OC_BACKEND_URL:-http://amd-halo:13305}"
+FORCE_MODEL="${OC_PROXY_FORCE_MODEL:-gpt-oss-120b-Q4_K_M}"
 VENV_DIR="${VENV_DIR:-${PKG_DIR}/.venv}"
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 SECRETS_FILE="${OC_SECRETS_FILE:-/etc/oc-personal/secrets.env}"
@@ -175,6 +176,7 @@ cmd_install() {
             -e "s|__PROJECT_ROOT__|${PROJECT_ROOT}|g" \
             -e "s|__USER_HOME__|${user_home}|g" \
             -e "s|^Environment=OC_BACKEND_URL=.*|Environment=OC_BACKEND_URL=${BACKEND_URL}|" \
+            -e "s|^Environment=OC_PROXY_FORCE_MODEL=.*|Environment=OC_PROXY_FORCE_MODEL=${FORCE_MODEL}|" \
             -e "s|^Environment=OC_LISTEN_PORT=.*|Environment=OC_LISTEN_PORT=${LISTEN_PORT}|" \
             -e "s|^EnvironmentFile=.*|EnvironmentFile=-${SECRETS_FILE}|" \
             "${svc_src}" > "${svc_tmp}"
@@ -241,7 +243,8 @@ cmd_test() {
     ok "oc-personal chat completion OK"
     echo
 
-    info "POST ${base}/v1/chat/completions  (model=gemma4:e4b — proxied to backend)"
+    info "POST ${base}/v1/chat/completions  (model=gemma4:e4b — proxied to backend"
+    info "with the model rewritten to ${FORCE_MODEL})"
     info "If the backend at ${BACKEND_URL} is reachable, expect a real reply."
     info "If not, expect a proxy-error response (still 200, with 'upstream:' message)."
     echo

@@ -15,7 +15,7 @@ Before answering anything substantive, run `agentos --json --project project-jar
 - `tools/google-mcp/` — Gmail + Calendar MCP, joined to the brain-MCP via a multi-MCP runner under `tools/oc-personal-runner/`.
 - `tools/brain-mcp/` — exposes 6 tools to the agent (`brain_search`, `brain_capture`, `brain_lint`, `brain_list_projects`, `brain_set_next_action`, `brain_ingest_status`). The runtime catalog is **12 tools** total (6 brain + 6 google); `brain_ingest` is scheduler-driven, not on the agent surface.
 
-The repo is a PlatformIO project (`platformio.ini` + `src/`). It builds Arduino C++ for ESP32-S3 (M5Stack CoreS3). Build with `pio run` / `pio run -t upload` / `pio run -t uploadfs`. Local LLM backend defaults to **Ollama** on `192.168.1.108:11434` (was LM Studio; provider-agnostic proxy from PR #49). No `npm` / `pytest` / `make` workflow.
+The repo is a PlatformIO project (`platformio.ini` + `src/`). It builds Arduino C++ for ESP32-S3 (M5Stack CoreS3). Build with `pio run` / `pio run -t upload` / `pio run -t uploadfs`. Local LLM backend defaults to **Lemonade** on `amd-halo:13305`, model `gpt-oss-120b-Q4_K_M` (was Ollama on 192.168.1.108; provider-agnostic proxy from PR #49). No `npm` / `pytest` / `make` workflow.
 
 ## Where to read first
 
@@ -50,7 +50,7 @@ These cut across multiple sections of the plan and are easy to miss from any sin
 ## External endpoints
 
 - **OpenClaw / personal agent** (LAN-first, Tailscale path also available): `http://192.168.1.178:8080` on the LAN, `https://lobsterboy.tail1c66ec.ts.net` via Tailscale — OpenAI-compatible `POST /v1/chat/completions`, served by `tools/oc-personal-runner/`. `model="oc-personal"` runs a Claude + multi-MCP agent loop (12 tools: 6 brain + 6 google) on lobsterboy; any other model name is proxied to the configured local backend. The device hits the bare LAN port; the Tailscale path is for off-LAN access.
-- **Local LLM backend**: Ollama at `http://192.168.1.108:11434` by default (PR #49 made the proxy provider-agnostic). NVS `oc_host` overrides; `LM_STUDIO_TOKEN` is forwarded as `Bearer` on passthrough (PR #37) so a token-protected LM Studio install still works.
+- **Local LLM backend**: Lemonade at `http://amd-halo:13305` by default (Tailscale hostname; PR #49 made the proxy provider-agnostic). The proxy rewrites the passthrough model to `OC_PROXY_FORCE_MODEL` (default `gpt-oss-120b-Q4_K_M`). NVS `oc_host` overrides; `OC_BACKEND_TOKEN` is forwarded as `Bearer` on passthrough (PR #37) — Lemonade requires it.
 - **Anthropic (direct)**: `api.anthropic.com` — used by `AnthropicClient` for the `claude` intent on HOTSPOT_ONLY (PR #19). Bearer token in NVS `anth_key`.
 - **Home Assistant** (Nabu Casa): `pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa` — REST API, bearer-token auth from NVS (`ha_token`). `WiFiClientSecure` with `setInsecure()`; cert pinning is a deferred TODO. MQTT broker on HA (`mqtt_host` in NVS); topics `jarvis/state`, `jarvis/command`, `jarvis/speak`.
 - **Cloud TTS**: OpenAI `/v1/audio/speech` or ElevenLabs `/v1/text-to-speech/<voice_id>` per NVS `tts_provider`. Per-source provider routing exists (PR #43): proactive pushes can use a different voice than reactive replies. melotts on the LLM Module is the fallback.

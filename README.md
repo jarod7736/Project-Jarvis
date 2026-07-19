@@ -54,7 +54,7 @@ Mic (LLM Module)
 |4   |2nd Brain RAG via `oc-personal`        |3–8s    |Personal knowledge, voice notes       |
 |5   |Qwen 0.5B (offline fallback only)      |~instant|No network available                  |
 
-The "OpenClaw" endpoint is now lobsterboy's `oc-personal-runner` (Phase 8) — an OpenAI-compatible front that handles `model="oc-personal"` natively (Claude + brain-mcp agent loop) and proxies every other model name straight through to LM Studio at `192.168.1.108:1234`. CoreS3 sends standard `POST /v1/chat/completions`; the runner picks the path based on the `model` field.
+The "OpenClaw" endpoint is now lobsterboy's `oc-personal-runner` (Phase 8) — an OpenAI-compatible front that handles `model="oc-personal"` natively (Claude + brain-mcp agent loop) and proxies every other model name through to Lemonade at `amd-halo:13305` (model pinned to `gpt-oss-120b-Q4_K_M` via `OC_PROXY_FORCE_MODEL`). CoreS3 sends standard `POST /v1/chat/completions`; the runner picks the path based on the `model` field.
 
 -----
 

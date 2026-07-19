@@ -8,7 +8,7 @@ Deployment (lobsterboy):
 
     # Smoke test (foreground)
     ANTHROPIC_API_KEY=sk-ant-... \\
-    OC_BACKEND_URL=http://192.168.1.108:11434 \\
+    OC_BACKEND_URL=http://amd-halo:13305 \\
     OC_BRAIN_MCP_COMMAND=/home/$USER/project-jarvis/tools/brain-mcp/.venv/bin/python \\
         .venv/bin/python -m oc_personal.server
 
