@@ -197,12 +197,19 @@ void setup() {
     bool need_oc   = (jarvis::NVSConfig::getOcKey().length()   == 0);
     bool need_ota  = (jarvis::NVSConfig::getOtaPass().length() == 0);
     bool need_mqtt = (jarvis::NVSConfig::getMqttHost().length() == 0);
-    if (wifi_ok && (need_ha || need_oc || need_ota || need_mqtt)) {
-        Serial.printf("[PROV] Missing creds: ha_token=%s oc_key=%s ota_pass=%s mqtt_host=%s\n",
+    // Gating on lemo_key too, so a device provisioned before the lemonade
+    // TTS provider existed can still be given one over serial. Without
+    // this, any key added after first-run setup is reachable only through
+    // the captive portal, which needs a physical 2s touchscreen press —
+    // painful for a device that's already deployed and headless.
+    bool need_lemo = (jarvis::NVSConfig::getLemonadeKey().length() == 0);
+    if (wifi_ok && (need_ha || need_oc || need_ota || need_mqtt || need_lemo)) {
+        Serial.printf("[PROV] Missing creds: ha_token=%s oc_key=%s ota_pass=%s mqtt_host=%s lemo_key=%s\n",
                       need_ha   ? "MISSING" : "set",
                       need_oc   ? "MISSING" : "set",
                       need_ota  ? "MISSING" : "set",
-                      need_mqtt ? "MISSING" : "set");
+                      need_mqtt ? "MISSING" : "set",
+                      need_lemo ? "MISSING" : "set");
         Serial.println("[PROV] Send JSON now, or skip and those services error.");
         jarvis::NVSConfig::provisionFromSerial(30000);
     }

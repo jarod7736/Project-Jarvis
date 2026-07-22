@@ -587,6 +587,9 @@ static bool applyProvisioningJson(const JsonDocument& doc) {
         {"mqtt_pass",    true,  &NVSConfig::setMqttPass},
         {"anth_key",     true,  &NVSConfig::setAnthKey},
         {"anth_model",   false, &NVSConfig::setAnthModel},
+        {"lemo_host",    false, &NVSConfig::setLemonadeHost},
+        {"lemo_key",     true,  &NVSConfig::setLemonadeKey},
+        {"lemo_voice",   false, &NVSConfig::setLemonadeVoice},
     };
     for (const auto& f : string_fields) {
         JsonVariantConst v = doc[f.json];
