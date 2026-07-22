@@ -86,15 +86,19 @@ as a follow-up task below, not a blocker.
 
 ### 2. Repo reconcile
 
+Most of this turned out to be **already landed upstream** in `1ad43bd`
+("switch passthrough backend to Lemonade on amd-halo"), which the local checkout
+had not pulled — `config.py`, `deploy.sh`, the systemd unit, and the CLAUDE.md
+endpoint sections were all done. What remained:
+
 | File | Change |
 |---|---|
-| `tools/oc-personal-runner/.../config.py` | `BACKEND_URL` default `http://192.168.1.108:11434` → `http://amd-halo:13305`; document `OC_BACKEND_TOKEN` as the Lemonade API key |
 | `src/config.h` | `kOcLocalModel` `gemma3n:e4b` → `gpt-oss-120b-Q4_K_M`; rewrite the Ollama comment block |
-| `CLAUDE.md` | Ollama → Lemonade in both the project-state and external-endpoints sections |
+| `CLAUDE.md` | TTS provider list, the lemonade model-loading gotcha, the `TAILSCALE`-tier clarification, and the new NVS keys |
 
-No behavior change on the device from these — `OC_PROXY_FORCE_MODEL` already
-overrides whatever model name the device sends. They stop the repo lying about
-where inference happens.
+No behavior change on the device from the `config.h` edit — `OC_PROXY_FORCE_MODEL`
+already overrides whatever model name the device sends. It stops the repo lying
+about where inference happens.
 
 ### 3. TTS: a `lemonade` provider
 
@@ -139,15 +143,27 @@ Fallback chain, evaluated in `LLMModule::speak()`, first match wins:
 
 | Condition | Action |
 |---|---|
-| `tier == LAN` and `lemo_host` + `lemo_key` both set | kokoro via Lemonade |
-| `tier == TAILSCALE` or `HOTSPOT_ONLY` | cloud TTS, if `tts_api_key` is set |
+| `tier` is `LAN` or `TAILSCALE`, and `lemo_key` is set | kokoro via Lemonade |
+| `tier` is `LAN` or `HOTSPOT_ONLY`, and `tts_api_key` is set | cloud TTS |
 | `tier == OFFLINE` | melotts, directly — no HTTP attempted |
-| any of the above fails or is unconfigured | melotts |
+| every candidate fails or none is configured | melotts |
 
-`TAILSCALE` is grouped with `HOTSPOT_ONLY` rather than with `LAN` because
-`lemo_host` is a LAN address (`192.168.1.118`) and is not routable from that
-tier. This is deliberate: the CoreS3 cannot join a tailnet, so a `TAILSCALE`
-tier reading never implies amd-halo is reachable.
+**Corrected during implementation.** An earlier draft grouped `TAILSCALE` with
+`HOTSPOT_ONLY`, reasoning that a LAN address isn't routable from a "remote"
+tier. Reading `WiFiManager::getConnectivityTier()` showed the opposite: the OC
+probe targets `oc_host`, which is lobsterboy on a **private address**, so
+OC-reachable implies we are on the home network. `TAILSCALE` (OC up, HA down) is
+therefore "on the LAN with internet down" — amd-halo *is* reachable and the
+cloud providers are *not*. The tier name reads backwards from what it means.
+
+So `LAN`/`TAILSCALE` are the LAN-reachable tiers, and `LAN`/`HOTSPOT_ONLY` are
+the internet-reachable ones. `LAN` is the only tier where both hold, which is
+why it appears in both rows.
+
+When the configured provider is `lemonade` but the tier can't reach it, the
+cloud fallback provider is `config::kTtsLemonadeFallback` (`"openai"`), used
+only if `tts_api_key` is set. A constant rather than an NVS key: an ElevenLabs
+user is better served setting `tts_provider` directly.
 
 The tier gate matters: the CoreS3 cannot join a tailnet and lobsterboy's
 `tailscale serve` is tailnet-only (no Funnel), so `*.ts.net` is unreachable from
@@ -189,8 +205,12 @@ strip only — not a markdown parser.
 
 ### 7. Documentation
 
-- Fix `192.168.1.61` → `192.168.1.118` in the 2ndBrain runbook.
-- Record the gpt-oss autoload root cause and the proxy workaround.
+- Record the gpt-oss autoload root cause and the proxy workaround in `CLAUDE.md`.
+- **2ndBrain correction, not applied here:** the runbook
+  `wiki/analyses/lemonade-model-runbook.md` gives amd-halo as `192.168.1.61`,
+  which does not answer; the live address is `192.168.1.118`. That vault is a
+  separate repo, so this is left as a recommendation rather than an
+  uncommitted edit in someone else's working tree.
 
 ## Out of scope
 
@@ -205,17 +225,19 @@ strip only — not a markdown parser.
 
 ## Verification
 
-| Claim | How |
+| Claim | Result |
 |---|---|
-| Firmware compiles | `pio run` |
-| kokoro returns playable MP3 | done during design: 200, `audio/mpeg`, 97 KB |
-| gpt-oss serves end-to-end | done during design: 0.87 s via `oc-personal` |
-| Load-on-demand works | restart `lemond`, confirm the first Jarvis query succeeds without a manual load |
-| Fallback chain | force each tier, confirm kokoro / cloud / melotts in the serial log |
-| On-device audio | flash or OTA, speak a query, confirm kokoro voice — **requires hardware, user-run** |
+| Firmware compiles | **PASS** — `pio run` SUCCESS, RAM 16.9%, Flash 24.0% |
+| kokoro returns playable MP3 | **PASS** — 200, `audio/mpeg`, 97 KB, 24 kHz mono |
+| gpt-oss serves end-to-end | **PASS** — 0.87 s via `oc-personal` |
+| Load-on-demand self-heals | **PASS** — unloaded the model to reproduce the failure, then drove the real proxy code: `500 model_load_error` → `POST /api/v1/load` 200 → retry 200, 18.1 s cold |
+| Warm path skips reload | **PASS** — second call 0.9 s, no load issued |
+| Fallback chain | **NOT VERIFIED** — needs a device on each tier |
+| On-device audio | **NOT VERIFIED** — needs a flash/OTA and a spoken query |
 
-The last row cannot be verified from the implementation environment. It will be
-reported as unverified rather than claimed.
+The last two rows cannot be exercised from the implementation environment and
+are reported as unverified rather than claimed. The C++ changes are compile-
+verified only; the repo has no host-side test harness for firmware code.
 
 ## Decisions taken
 

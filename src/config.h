@@ -98,13 +98,13 @@ constexpr uint16_t    kOpenclawPortDefault = 8080;
 // ── OpenClaw model routing (PLAN.md Phase 6) ──────────────────────────────
 // oc-personal-runner forwards any non-`oc-personal` model name to the
 // configured OpenAI-compat backend (env var OC_BACKEND_URL, default
-// Ollama at http://192.168.1.108:11434). The local model name below
-// must match a model the backend has loaded — for Ollama, the form is
-// `<name>:<tag>` as it appears in `ollama list`.
-// Switched off gemma4:e4b after it returned philosophical word-salad
-// (responses starting with `]` to plain weather queries). gemma3n:e4b
-// follows the OpenAI-compat chat schema cleanly on Ollama.
-constexpr const char* kOcLocalModel  = "gemma3n:e4b";
+// Lemonade at http://amd-halo:13305). The local model name below must
+// match a model the backend has loaded, as it appears in
+// `GET /api/v1/models`.
+// In practice the runner's OC_PROXY_FORCE_MODEL rewrites this before
+// forwarding, so it's the fallback name rather than the live one — keep
+// them in sync anyway so the firmware doesn't lie about where it lands.
+constexpr const char* kOcLocalModel  = "gpt-oss-120b-Q4_K_M";
 // Claude routing: when NVS `anth_key` is set, the "claude" intent
 // dispatches directly to Anthropic via AnthropicClient. Otherwise it
 // falls through to the backend with this model name — which the
@@ -161,6 +161,26 @@ constexpr const char* kTtsOpenAIPath     = "/v1/audio/speech";
 constexpr const char* kTtsElevenHost     = "api.elevenlabs.io";
 // Path is voice-suffixed at request time: "/v1/text-to-speech/<voice_id>"
 constexpr const char* kTtsElevenPathBase = "/v1/text-to-speech/";
+
+// Lemonade (kokoro) on amd-halo. Unlike the two cloud providers this is
+// plain HTTP on the LAN — TtsClient uses a bare WiFiClient for it, not
+// WiFiClientSecure. Host lives in NVS `lemo_host` (host:port) because
+// it's site-specific; the default below matches the current homelab.
+// Note this is the LAN address deliberately: the CoreS3 can't join a
+// tailnet, so the *.ts.net name lobsterboy uses is unreachable here.
+constexpr const char* kTtsLemonadeHostDefault = "192.168.1.118:13305";
+constexpr const char* kTtsLemonadePath        = "/api/v1/audio/speech";
+// Lemonade exposes exactly one TTS model, so it's baked in rather than
+// spending an NVS key on it. Voices are kokoro presets (af_*/am_* =
+// American female/male, bf_*/bm_* = British); `af_sky` is verified.
+constexpr const char* kTtsLemonadeModel        = "kokoro-v1";
+constexpr const char* kTtsLemonadeVoiceDefault = "af_sky";
+// Off-LAN fallback when the configured provider is "lemonade" and the
+// tier says amd-halo can't be reached. Only used if `tts_api_key` is
+// provisioned; otherwise the chain drops straight to melotts. A constant
+// rather than an NVS key because it's a second-order preference — an
+// ElevenLabs user is better served setting tts_provider directly.
+constexpr const char* kTtsLemonadeFallback     = "openai";
 
 // 15 s total HTTP budget. Phase 7 streaming impl can chunk-download into
 // a ring buffer so playback starts before the full payload arrives, but

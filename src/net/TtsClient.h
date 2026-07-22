@@ -33,16 +33,27 @@ struct Mp3Buffer {
 
 class TtsClient {
 public:
-    // True iff at least an api_key is provisioned. Provider/voice/model
-    // all fall back to defaults from config.h, so they aren't required
-    // for routing — just the key.
+    // True iff a cloud api_key is provisioned. Provider/voice/model all
+    // fall back to defaults from config.h, so they aren't required for
+    // routing — just the key. Says nothing about the lemonade path,
+    // which carries its own credential; see isLemonadeConfigured().
     static bool isConfigured();
 
-    // Synthesise `text` to MP3 via the configured provider. Blocks for
-    // up to kTtsHttpTimeoutMs. Returns an empty buffer on any failure;
-    // a Serial.printf at every failure path makes diagnosis easy.
-    // Caller (LLMModule::speak()) falls back to melotts on empty.
-    static Mp3Buffer synthesize(const String& text);
+    // True iff `lemo_key` is provisioned. Host and voice have defaults,
+    // so the key is the only hard requirement.
+    static bool isLemonadeConfigured();
+
+    // Synthesise `text` to MP3 via `provider` ("lemonade", "openai",
+    // "eleven"/"elevenlabs"). Blocks for up to kTtsHttpTimeoutMs.
+    // Returns an empty buffer on any failure; a Serial.printf at every
+    // failure path makes diagnosis easy. Caller (LLMModule::speak())
+    // walks its fallback chain on empty.
+    //
+    // The provider is passed in rather than re-read from NVS because the
+    // caller already resolved it: speak() picks source-aware between
+    // `tts_provider` and `tts_proact`, and the fallback chain needs to
+    // request a *specific* provider after the preferred one fails.
+    static Mp3Buffer synthesize(const String& text, const String& provider);
 };
 
 }  // namespace jarvis::net
