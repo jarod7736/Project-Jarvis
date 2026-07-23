@@ -72,6 +72,24 @@ bool startsWithMeta(const String& sentence) {
     return false;
 }
 
+// Drop inline-markdown emphasis characters. gpt-oss formats its replies
+// ("The capital of France is **Paris**."), and those asterisks reach the
+// TTS provider verbatim — kokoro has no markdown awareness, so they
+// either get vocalised or mangle the surrounding word. Character-level
+// removal, not a markdown parser: we only care that the spoken string is
+// clean. Apostrophes and hyphens are left alone since they're ordinary
+// prose punctuation.
+String stripMarkdown(const String& s) {
+    String out;
+    out.reserve(s.length());
+    for (int i = 0; i < (int)s.length(); ++i) {
+        char c = s[i];
+        if (c == '*' || c == '_' || c == '`' || c == '#') continue;
+        out += c;
+    }
+    return out;
+}
+
 // Walk every sentence and keep only the non-meta ones. gemma-4-e4b
 // sometimes interleaves analysis with the answer ("I already explained it
 // correctly. I should give a concise version. <actual answer>"), so
@@ -256,7 +274,8 @@ String LLMClient::query(const String& userPrompt, const char* model) {
 
     String stripped  = stripThinkingMarkers(content);
     String demeta    = stripMetaPreamble(stripped);
-    String trimmed   = sentenceBoundaryTruncate(demeta, jarvis::config::kOcMaxReplyChars);
+    String plain     = stripMarkdown(demeta);
+    String trimmed   = sentenceBoundaryTruncate(plain, jarvis::config::kOcMaxReplyChars);
     Serial.printf("[LLMClient] -> %u chars (raw=%u, post-think=%u, post-meta=%u)\n",
                   (unsigned)trimmed.length(),
                   (unsigned)content.length(),

@@ -58,6 +58,22 @@ String buildElevenBody(const String& text, const String& model) {
     return body;
 }
 
+// Lemonade (kokoro) body. OpenAI-shaped, but the model is fixed and it
+// has no prosody-hint equivalent. mp3 is requested deliberately: the wav
+// variant comes back as 32-bit IEEE float at ~4.8x the size (465 KB vs
+// 97 KB for one sentence), which neither the 256 KB cap nor AudioPlayer's
+// decoder would accept.
+String buildLemonadeBody(const String& text, const String& voice) {
+    JsonDocument req;
+    req["model"]           = jarvis::config::kTtsLemonadeModel;
+    req["voice"]           = voice;
+    req["input"]           = text;
+    req["response_format"] = "mp3";
+    String body;
+    serializeJson(req, body);
+    return body;
+}
+
 // Common: download `http`'s response body into a freshly-allocated PSRAM
 // buffer, capped at kTtsMaxMp3Bytes. Returns the buffer or empty on any
 // failure. http is consumed (end()'d) by the caller.
@@ -187,22 +203,71 @@ Mp3Buffer synthEleven(const String& text, const String& voice,
     return out;
 }
 
+// Lemonade on the LAN. The only provider that speaks plain HTTP — a bare
+// WiFiClient, not WiFiClientSecure. `host` is "host:port", no scheme.
+Mp3Buffer synthLemonade(const String& text, const String& voice,
+                        const String& host, const String& apiKey) {
+    using namespace jarvis::config;
+
+    WiFiClient plain;
+    HTTPClient http;
+    http.setTimeout(kTtsHttpTimeoutMs);
+    http.useHTTP10(true);
+
+    String url = String("http://") + host + kTtsLemonadePath;
+    if (!http.begin(plain, url)) {
+        Serial.println("[TtsClient] http.begin failed (lemonade)");
+        return Mp3Buffer{};
+    }
+    http.addHeader("Authorization", String("Bearer ") + apiKey);
+    http.addHeader("Content-Type",  "application/json");
+    http.addHeader("Accept",        "audio/mpeg");
+
+    String body = buildLemonadeBody(text, voice);
+    Serial.printf("[TtsClient] POST %s body=%u chars\n", url.c_str(),
+                  (unsigned)body.length());
+    int code = http.POST(body);
+    Mp3Buffer out = downloadBody(http, code);
+    http.end();
+    return out;
+}
+
 }  // namespace
 
 bool TtsClient::isConfigured() {
     return jarvis::NVSConfig::getTtsApiKey().length() > 0;
 }
 
-Mp3Buffer TtsClient::synthesize(const String& text) {
+bool TtsClient::isLemonadeConfigured() {
+    return jarvis::NVSConfig::getLemonadeKey().length() > 0;
+}
+
+Mp3Buffer TtsClient::synthesize(const String& text, const String& provider) {
     if (text.length() == 0) return Mp3Buffer{};
+
+    // Lemonade carries its own credential, so it's checked before the
+    // cloud key gate below — a device with only `lemo_key` set is a
+    // valid configuration.
+    if (provider.equalsIgnoreCase("lemonade")) {
+        if (!isLemonadeConfigured()) {
+            Serial.println("[TtsClient] lemonade not configured (no lemo_key)");
+            return Mp3Buffer{};
+        }
+        String host  = jarvis::NVSConfig::getLemonadeHost();
+        String voice = jarvis::NVSConfig::getLemonadeVoice();
+        Serial.printf("[TtsClient] synth provider=lemonade host=%s voice=%s len=%u\n",
+                      host.c_str(), voice.c_str(), (unsigned)text.length());
+        return synthLemonade(text, voice, host,
+                             jarvis::NVSConfig::getLemonadeKey());
+    }
+
     if (!isConfigured()) {
-        // Caller already checked tts_provider != "melotts" before calling
+        // Caller already checked provider != "melotts" before calling
         // us, so reaching here with no key is a config error worth a log.
         Serial.println("[TtsClient] not configured (no tts_api_key)");
         return Mp3Buffer{};
     }
 
-    String provider     = jarvis::NVSConfig::getTtsProvider();
     String voice        = jarvis::NVSConfig::getTtsVoiceId();
     String model        = jarvis::NVSConfig::getTtsModel();
     String apiKey       = jarvis::NVSConfig::getTtsApiKey();

@@ -6,6 +6,7 @@
 #include "../app/NVSConfig.h"
 #include "../config.h"
 #include "../net/TtsClient.h"
+#include "../net/WiFiManager.h"
 #include "../prompts/intent_prompt.h"
 #include "AudioPlayer.h"
 
@@ -450,22 +451,56 @@ void LLMModule::speak(const String& text, SpeakSource source) {
     Serial.printf("[LLMModule] speak(\"%s\") src=%s len=%u\n",
                   text.c_str(), source_name, (unsigned)text.length());
 
-    // Phase 7 cloud-TTS path. tts_provider != "melotts" + an api_key
-    // present + AudioPlayer ready = try cloud first. Failure on any
-    // step falls through to the melotts path below — no break in
-    // user-facing behavior.
+    // Network-TTS path. A provider other than "melotts" + AudioPlayer
+    // ready = try the network first; failure on any step falls through
+    // to the melotts path below, so user-facing behavior never breaks.
     //
     // Source-aware routing: Proactive reads `tts_proact` (notifier
-    // pushes can use a richer cloud voice because the user isn't
-    // waiting for a turn-taking reply); Response reads `tts_provider`.
-    // Everything else (voice id, model, api key, prosody) is shared.
+    // pushes can use a richer voice because the user isn't waiting for a
+    // turn-taking reply); Response reads `tts_provider`. The two cloud
+    // providers share voice id / model / api key / prosody; lemonade
+    // carries its own (`lemo_*`) so both can be provisioned at once.
     String tts_provider = (source == SpeakSource::Proactive)
         ? jarvis::NVSConfig::getTtsProactiveProvider()
         : jarvis::NVSConfig::getTtsProvider();
+
+    // Ordered candidates for this tier — first success wins, and an empty
+    // list means straight to melotts. Reachability is tier-derived rather
+    // than probed so we don't burn the HTTP timeout budget on a host that
+    // can't be reached, matching how personal_query short-circuits.
+    //
+    // Why TAILSCALE counts as LAN-reachable: the OC probe targets
+    // `oc_host`, which is lobsterboy on a private address. OC reachable
+    // therefore implies we're on the home network. TAILSCALE (OC up, HA
+    // down) is "on LAN, internet down" — amd-halo is reachable and the
+    // cloud providers are not, which is exactly backwards from how the
+    // tier name reads.
+    String candidates[2];
+    int    candidateCount = 0;
     if (!tts_provider.equalsIgnoreCase("melotts") &&
-        jarvis::net::TtsClient::isConfigured() &&
         jarvis::hal::AudioPlayer::ok()) {
-        jarvis::net::Mp3Buffer mp3 = jarvis::net::TtsClient::synthesize(text);
+        const auto tier = jarvis::net::WiFiManager::getConnectivityTier();
+        const bool lanOk = (tier == jarvis::net::ConnectivityTier::LAN ||
+                            tier == jarvis::net::ConnectivityTier::TAILSCALE);
+        const bool wanOk = (tier == jarvis::net::ConnectivityTier::LAN ||
+                            tier == jarvis::net::ConnectivityTier::HOTSPOT_ONLY);
+
+        if (tts_provider.equalsIgnoreCase("lemonade")) {
+            if (lanOk && jarvis::net::TtsClient::isLemonadeConfigured()) {
+                candidates[candidateCount++] = tts_provider;
+            }
+            if (wanOk && jarvis::net::TtsClient::isConfigured()) {
+                candidates[candidateCount++] =
+                    jarvis::config::kTtsLemonadeFallback;
+            }
+        } else if (wanOk && jarvis::net::TtsClient::isConfigured()) {
+            candidates[candidateCount++] = tts_provider;
+        }
+    }
+
+    for (int i = 0; i < candidateCount; ++i) {
+        jarvis::net::Mp3Buffer mp3 =
+            jarvis::net::TtsClient::synthesize(text, candidates[i]);
         if (!mp3.empty() && jarvis::hal::AudioPlayer::play(std::move(mp3))) {
             // Speaking is now driven by AudioPlayer; speak_done_at_ms_
             // gets a far-future sentinel so update()'s estimate-based
@@ -475,10 +510,14 @@ void LLMModule::speak(const String& text, SpeakSource source) {
             // drains.
             speaking_         = true;
             speak_done_at_ms_ = millis() + 60UL * 60UL * 1000UL;
-            Serial.println("[LLMModule] speak: cloud TTS in flight");
+            Serial.printf("[LLMModule] speak: %s TTS in flight\n",
+                          candidates[i].c_str());
             return;
         }
-        Serial.println("[LLMModule] cloud TTS failed; falling back to melotts");
+        Serial.printf("[LLMModule] %s TTS failed\n", candidates[i].c_str());
+    }
+    if (candidateCount > 0) {
+        Serial.println("[LLMModule] all network TTS failed; falling back to melotts");
     }
 
     if (melotts_work_id_.length() == 0) {

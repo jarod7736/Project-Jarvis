@@ -59,6 +59,21 @@ public:
     static String getTtsModel();
     static bool   setTtsModel(const String& model);
 
+    // Lemonade (kokoro) TTS on the LAN. Kept in their own keys rather
+    // than reusing tts_api_key / tts_voice_id so cloud credentials
+    // survive alongside them — the fallback chain can use kokoro on LAN
+    // and a cloud provider off-LAN, and a shared voice field would give
+    // one of the two the wrong voice. `lemo_host` is "host:port" (no
+    // scheme; the transport is always plain HTTP). Unset host/voice fall
+    // back to config::kTtsLemonadeHostDefault / kTtsLemonadeVoiceDefault;
+    // an empty `lemo_key` disables the lemonade path entirely.
+    static String getLemonadeHost();
+    static bool   setLemonadeHost(const String& host);
+    static String getLemonadeKey();
+    static bool   setLemonadeKey(const String& key);
+    static String getLemonadeVoice();
+    static bool   setLemonadeVoice(const String& voice);
+
     // Optional prosody hint for OpenAI's `gpt-4o-mini-tts` model. Plain
     // English description of cadence / emphasis / tone that the model
     // applies on top of the chosen voice. Ignored by `tts-1` and

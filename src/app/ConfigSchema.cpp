@@ -38,9 +38,10 @@ constexpr EnumOption kTierOptions[] = {
     {"qwen",  "Qwen only (offline)"},
 };
 constexpr EnumOption kTtsProviderOptions[] = {
-    {"melotts", "Local (melotts)"},
-    {"openai",  "OpenAI"},
-    {"eleven",  "ElevenLabs"},
+    {"melotts",  "Local (melotts)"},
+    {"lemonade", "Lemonade (kokoro, LAN)"},
+    {"openai",   "OpenAI"},
+    {"eleven",   "ElevenLabs"},
 };
 
 constexpr ConfigField kSchema[] = {
@@ -99,6 +100,18 @@ constexpr ConfigField kSchema[] = {
      true,  0, 0, 0, false, "", nullptr, 0},
     {"tts_instr",    "TTS Prosody Hint",   "network", FieldType::String,
      false, 0, 0, 0, false, "", nullptr, 0},
+
+    // ── Lemonade TTS (kokoro on the LAN) ────────────────────────────────
+    // Separate from the cloud fields above so both sets of credentials can
+    // coexist: kokoro serves on LAN, a cloud provider covers off-LAN. The
+    // model is fixed (kokoro-v1) so it gets no field. `lemo_host` is
+    // host:port with no scheme — always plain HTTP.
+    {"lemo_host",    "Lemonade Host:Port", "network", FieldType::String,
+     false, 0, 0, 0, false, "192.168.1.118:13305", nullptr, 0},
+    {"lemo_key",     "Lemonade API Key",   "network", FieldType::String,
+     true,  0, 0, 0, false, "", nullptr, 0},
+    {"lemo_voice",   "Lemonade Voice",     "network", FieldType::String,
+     false, 0, 0, 0, false, "af_sky", nullptr, 0},
 
     // ── MQTT ────────────────────────────────────────────────────────────
     {"mqtt_host",    "MQTT Broker Host",   "network", FieldType::String,

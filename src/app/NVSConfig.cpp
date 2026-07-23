@@ -163,6 +163,54 @@ bool NVSConfig::setTtsApiKey(const String& key) {
     return ok;
 }
 
+String NVSConfig::getLemonadeHost() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("lemo_host", "");
+    p.end();
+    return s.length() ? s : String(jarvis::config::kTtsLemonadeHostDefault);
+}
+
+bool NVSConfig::setLemonadeHost(const String& host) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("lemo_host", host) > 0;
+    p.end();
+    return ok;
+}
+
+String NVSConfig::getLemonadeKey() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("lemo_key", "");
+    p.end();
+    return s;
+}
+
+bool NVSConfig::setLemonadeKey(const String& key) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("lemo_key", key) > 0;
+    p.end();
+    return ok;
+}
+
+String NVSConfig::getLemonadeVoice() {
+    Preferences p;
+    p.begin(NS, true);
+    String s = p.getString("lemo_voice", "");
+    p.end();
+    return s.length() ? s : String(jarvis::config::kTtsLemonadeVoiceDefault);
+}
+
+bool NVSConfig::setLemonadeVoice(const String& voice) {
+    Preferences p;
+    if (!p.begin(NS, false)) return false;
+    bool ok = p.putString("lemo_voice", voice) > 0;
+    p.end();
+    return ok;
+}
+
 String NVSConfig::getTtsModel() {
     Preferences p;
     p.begin(NS, true);
@@ -539,6 +587,9 @@ static bool applyProvisioningJson(const JsonDocument& doc) {
         {"mqtt_pass",    true,  &NVSConfig::setMqttPass},
         {"anth_key",     true,  &NVSConfig::setAnthKey},
         {"anth_model",   false, &NVSConfig::setAnthModel},
+        {"lemo_host",    false, &NVSConfig::setLemonadeHost},
+        {"lemo_key",     true,  &NVSConfig::setLemonadeKey},
+        {"lemo_voice",   false, &NVSConfig::setLemonadeVoice},
     };
     for (const auto& f : string_fields) {
         JsonVariantConst v = doc[f.json];
