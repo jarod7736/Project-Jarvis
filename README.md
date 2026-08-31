@@ -31,8 +31,8 @@ Mic (LLM Module)
   → Intent Router (keyword classifier + Qwen 0.5B as best-effort hint)
       ├── Simple/fast command  → On-device handler (time, date, math, OTA)
       ├── HA action/query      → HA REST API (WiFi)
-      ├── Complex reasoning    → OpenClaw / local LLM (LAN/Tailscale)
-      ├── Creative / nuanced   → Claude (via OpenClaw, or direct on hotspot)
+      ├── Complex reasoning    → oc-personal runner / local LLM (LAN/Tailscale)
+      ├── Creative / nuanced   → Claude (direct on hotspot, or via runner)
       ├── Personal query       → 2nd Brain RAG via oc-personal (lobsterboy)
       └── Journal note         → 2nd Brain capture via oc-personal (lobsterboy)
   → Response text → CoreS3
@@ -49,21 +49,21 @@ Mic (LLM Module)
 |Tier|Handler                                |Latency |Use Case                              |
 |----|---------------------------------------|--------|--------------------------------------|
 |1   |On-device CoreS3 handler               |~instant|Time, date, math, OTA, canned replies |
-|2   |Local LLM via OpenClaw / LM Studio     |1–3s LAN|Complex queries, multi-step reasoning |
-|3   |Claude via OpenClaw or Anthropic API   |3–6s    |Creative, nuanced, full-intelligence  |
+|2   |Local LLM via oc-personal runner (Lemonade) |1–3s LAN|Complex queries, multi-step reasoning |
+|3   |Claude via Anthropic API (direct on hotspot)|3–6s    |Creative, nuanced, full-intelligence  |
 |4   |2nd Brain RAG via `oc-personal`        |3–8s    |Personal knowledge, voice notes       |
 |5   |Qwen 0.5B (offline fallback only)      |~instant|No network available                  |
 
-The "OpenClaw" endpoint is now lobsterboy's `oc-personal-runner` (Phase 8) — an OpenAI-compatible front that handles `model="oc-personal"` natively (Claude + brain-mcp agent loop) and proxies every other model name through to Lemonade at `amd-halo:13305` (model pinned to `gpt-oss-120b-Q4_K_M` via `OC_PROXY_FORCE_MODEL`). CoreS3 sends standard `POST /v1/chat/completions`; the runner picks the path based on the `model` field.
+The "OpenClaw" endpoint is now lobsterboy's `oc-personal-runner` (Phase 8) — an OpenAI-compatible front that handles `model="oc-personal"` natively (multi-MCP agent loop on the Lemonade `coder` alias) and proxies every other model name through to Lemonade at `amd-halo:13305` (model rewritten to `coder` via `OC_PROXY_FORCE_MODEL`). CoreS3 sends standard `POST /v1/chat/completions`; the runner picks the path based on the `model` field. OpenClaw itself was decommissioned 2026-08-30 — the runner is self-contained and never depended on it.
 
 -----
 
 ## Backends
 
 - **HA REST API** — light control, lock/unlock, sensor queries, automations
-- **OpenClaw / Local LLM** — complex questions, multi-step tasks. Currently `google/gemma-4-e4b` via LM Studio.
-- **Claude API** — via OpenClaw as proxy on LAN/Tailscale, or direct to `api.anthropic.com` on phone hotspot
-- **2nd Brain (`oc-personal`)** — personal knowledge wiki at `jarod7736/2ndBrain`. Read via `brain_search`, write via `brain_capture`. Runs as an MCP server (`tools/brain-mcp/`) on lobsterboy, fronted by an agent runner (`tools/oc-personal-runner/`) that drives Claude with the MCP tools attached.
+- **oc-personal runner / Local LLM** — complex questions, multi-step tasks. Agent loop + passthrough on Lemonade (`coder` alias) at amd-halo.
+- **Claude API** — direct to `api.anthropic.com` on phone hotspot (or via the runner on LAN/Tailscale)
+- **2nd Brain (`oc-personal`)** — personal knowledge wiki at `jarod7736/2ndBrain`. Read via `brain_search`, write via `brain_capture`. Runs as an MCP server (`tools/brain-mcp/`) on lobsterboy, fronted by an agent runner (`tools/oc-personal-runner/`) that drives the Lemonade `coder` model with the MCP tools attached.
 - **On-device** — timers, time/date, math, OTA, canned responses
 
 -----
@@ -82,7 +82,7 @@ No network                → Qwen local only (offline tier)
 `personal_query` and `journal_note` require LAN or Tailscale because the 2nd Brain MCP server lives on lobsterboy. On HOTSPOT_ONLY / OFFLINE the firmware short-circuits to `kErrPersonalOffline` ("I can't reach my notes right now.") rather than burning HTTP timeout budget on a doomed call.
 
 Credentials stored in ESP32 NVS (non-volatile storage), not hardcoded.  
-HA long-lived token, OpenClaw URL, and TTS API key all live in NVS.
+HA long-lived token, oc-personal URL, and TTS API key all live in NVS.
 
 -----
 
@@ -139,7 +139,7 @@ Detailed per-phase design, retros, and validation gates live in [`PLAN.md`](PLAN
 - [x] Build keyword classifier as primary path (Qwen 0.5B is unreliable as classifier — see Phase 5 retro)
 - [x] Add fallback handling for low-confidence classifications
 
-### Phase 6 — OpenClaw / Local LLM Integration ✅
+### Phase 6 — oc-personal / Local LLM Integration ✅
 
 - [x] Implement OpenAI-compatible HTTP client on CoreS3 (`net/LLMClient.cpp`)
 - [x] Provider-agnostic local backend — Ollama by default (PR #49), LM Studio still supported via NVS `oc_host`; `LM_STUDIO_TOKEN` forwarded as Bearer on passthrough (PR #37)
@@ -173,7 +173,7 @@ See [`plans/phase8-2nd-brain-validation.md`](plans/phase8-2nd-brain-validation.m
 
 - [x] **Notifier service** — 3-tier priority router on lobsterboy:8081 (`tools/notifier/`), high pushes via MQTT `jarvis/speak` + Pushover, medium queues to disk and drains on next IDLE (Sprint 1 #1, #14, PR #41)
 - [x] **On-device Settings screen** — brightness / volume / mic-gain sliders (PR #41)
-- [x] **Morning brief** — scheduled 08:00 focus brief via `oc-personal` + `brain_list_projects` + `gcal_list_events` (`tools/morning-brief/`, Sprint 2 #2, PR #44)
+- [x] **Morning brief** — scheduled 08:00 focus brief via `oc-personal` + `brain_list_projects` + `gcal_list_events` (`tools/morning-brief/`, Sprint 2 #2, PR #44). **Stopped 2026-08-30** (agent response exceeded the 60s timeout).
 - [x] Morning brief stale-resurface — biases focus toward projects whose `next_action` hasn't moved in 7+ days (Sprint 2 #10, PR #47)
 - [x] Multi-MCP runner (brain + google) (PRs #34, #35) + project-tracking tools (PR #33)
 - [x] Calendar / email / project utterances routed to `personal_query` (PR #36)
@@ -184,7 +184,7 @@ See [`plans/phase8-2nd-brain-validation.md`](plans/phase8-2nd-brain-validation.m
 
 - **Qwen 0.5B** on the LLM Module is the `qwen2.5-0.5b-prefill-20e` variant — it doesn't reliably follow instruction prompts. Used as a 4-second best-effort hint; the deterministic keyword classifier is the primary route. Phase 5 retro has the gory details.
 - **ASR accuracy** degrades in noisy environments. ASR also drops the front of fast speech that follows immediately after the wake word — KWS+ASR start latency, see Phase 2 retro.
-- **API latency**: HA round-trip ~3 s; OpenClaw/Claude ~1–6 s; `oc-personal` agent loop up to ~10 s when Claude needs multiple `brain_search` calls (capped at 4 inner turns).
+- **API latency**: HA round-trip ~3 s; oc-personal/Claude ~1–6 s; `oc-personal` agent loop up to ~10 s when the agent needs multiple `brain_search` calls (capped at 4 inner turns).
 - **LLM Module models** are AXERA-proprietary format — cannot load arbitrary HuggingFace models without conversion.
 - **CoreS3 memory** is sufficient for orchestration but not heavy local inference.
 - **2nd Brain ingestion** is still LLM-driven and runs from the laptop's `/brain-ingest` Claude Code skill, not from the MCP server. `brain_capture` (write voice notes into `raw/`) works from the device today; agentic processing of those notes happens during a manual ingest pass.
@@ -199,7 +199,7 @@ External:
 - [M5Module-LLM Arduino API](https://docs.m5stack.com/en/stackflow/module_llm/arduino_api)
 - [LLM Module JSON API](https://docs.m5stack.com/en/stackflow/module_llm/api)
 - [CoreS3 Docs](https://docs.m5stack.com/en/core/CoreS3)
-- OpenClaw endpoint (LAN): `http://192.168.1.178:8080` — the device path. Tailscale fallback: `https://lobsterboy.tail1c66ec.ts.net`.
+- oc-personal endpoint (LAN): `http://192.168.1.178:8080` — the device path. Tailscale fallback: `https://lobsterboy.tail1c66ec.ts.net`.
 - HA Nabu Casa: `pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa`
 
 In-tree:

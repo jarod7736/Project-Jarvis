@@ -982,6 +982,21 @@ Tracker: `plans/phase8-2nd-brain-validation.md`. Six of ten gates passed in a si
 
 **State at retro:** Phase 8 closed for hardware-validation purposes. The next time someone touches the brain-mcp surface (adding a vector index, persona injection, scheduled ingest), gates 8–10 should be picked up alongside.
 
+### Post-Phase 8 — OpenClaw decommission (2026-08-30)
+
+OpenClaw (the gateway product) was decommissioned on lobsterboy. It was never a runtime dependency of anything Jarvis-related — the `oc-personal-runner` is self-contained FastAPI + MCP and talks to Lemonade directly. Removed:
+
+- All OpenClaw user systemd units + timers (gateway, config, ha-publish/pull, health, logs, security, update-doctor) — stopped, disabled, unit files deleted.
+- OpenClaw binaries (`openclaw`, `clawctl`, `openclaw-monitor`, `~/.local/lib/node_modules/openclaw`).
+- The tailscale-serve `/` route (OpenClaw Control SPA). `/healthz` and `/v1/chat/completions` still proxy to oc-personal.
+- The daily AMD-brief cron (`gemma3n-e4n.sh`, lived under `~/.openclaw/tools/`).
+
+Kept: `~/.openclaw/` data dir (inert), the google-mcp token-refresh cron (oc-personal's calendar/email depend on it), `brain-sync.timer`.
+
+**Also fixed the same day:** the passthrough 404. The runner's `OC_PROXY_FORCE_MODEL` was `chat`, which does not exist on Lemonade (404 on every non-`oc-personal` request — the firmware's `local_llm`/`claude` intents were dead). Changed to `coder` (a Lemonade tool-calling alias, ~4s). The agent path already used `coder` and was unaffected. `tools/oc-personal-runner/src/oc_personal/config.py` default updated to match.
+
+**Morning brief stopped the same day:** the agent response (~56s) exceeded the 60s `OC_TIMEOUT_SEC`; it had been failing intermittently since 2026-08-28. Re-enable only after a timeout bump or a faster model.
+
 ---
 
 ## Cross-Phase Dependency Graph

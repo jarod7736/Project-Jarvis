@@ -9,8 +9,7 @@ forwarding; otherwise the request goes through verbatim. Lets Jarvis
 treat lobsterboy as the only OpenClaw endpoint while a local-LLM box
 handles the general-chat routing.
 
-Provider-agnostic naming so a future swap is one env-var change
-(`OC_BACKEND_URL`), not a code rename.
+Transport lives in backend.py, shared with the agent path.
 """
 
 from __future__ import annotations
@@ -18,107 +17,45 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
-
 from . import config
+from .backend import BackendClient, BackendError
 
 log = logging.getLogger(__name__)
 
 
 class OpenAICompatProxy:
-    def __init__(self) -> None:
-        # Single shared client. Some backends (LM Studio, vLLM) support
-        # optional server-side token auth; if config.BACKEND_TOKEN is set
-        # we forward it as a Bearer. Ollama ignores it by default.
-        headers: dict[str, str] = {}
-        if config.BACKEND_TOKEN:
-            headers["Authorization"] = f"Bearer {config.BACKEND_TOKEN}"
-        self._client = httpx.AsyncClient(
-            base_url=config.BACKEND_URL,
-            timeout=httpx.Timeout(connect=3.0, read=30.0, write=30.0, pool=3.0),
-            headers=headers,
-        )
-
-    async def aclose(self) -> None:
-        await self._client.aclose()
+    def __init__(self, backend: BackendClient) -> None:
+        self._backend = backend
 
     async def forward(self, request: dict[str, Any]) -> dict[str, Any]:
         """Forward a chat-completions request and return the backend's response."""
-        if config.PROXY_FORCE_MODEL:
-            request = {**request, "model": config.PROXY_FORCE_MODEL}
         try:
-            resp = await self._client.post("/v1/chat/completions", json=request)
-        except httpx.HTTPError as exc:
-            log.warning("backend unreachable: %s", exc)
-            return _proxy_error(f"backend unreachable: {exc}")
-
-        # Lemonade models registered by local path (rather than pulled from
-        # the catalog) can't be auto-loaded by a chat request: the implicit
-        # load resolves the name against the Hugging Face API and 404s. An
-        # explicit /api/v1/load bypasses that lookup, but doesn't survive a
-        # lemond restart — so load on demand here and retry once.
-        if _is_model_load_error(resp):
-            model = request.get("model", "")
-            log.warning("backend can't auto-load %r; loading explicitly", model)
-            if await self._load_model(model):
-                try:
-                    resp = await self._client.post("/v1/chat/completions", json=request)
-                except httpx.HTTPError as exc:
-                    log.warning("backend unreachable after load: %s", exc)
-                    return _proxy_error(f"backend unreachable: {exc}")
-
-        if resp.status_code >= 400:
-            log.warning("backend returned %s: %s", resp.status_code, resp.text[:200])
-            return _proxy_error(f"backend HTTP {resp.status_code}")
-
-        try:
-            return resp.json()
-        except ValueError:
-            log.warning("backend returned non-JSON: %s", resp.text[:200])
-            return _proxy_error("backend response was not JSON")
-
-    async def _load_model(self, model: str) -> bool:
-        """Explicitly load `model` on the backend. Returns True on success.
-
-        Loading a large model is far slower than a chat turn (~36s observed
-        for gpt-oss-120b), so this overrides the client's read timeout.
-        """
-        if not model:
-            return False
-        try:
-            resp = await self._client.post(
-                "/api/v1/load",
-                json={"model_name": model},
-                timeout=httpx.Timeout(connect=3.0, read=300.0, write=30.0, pool=3.0),
-            )
-        except httpx.HTTPError as exc:
-            log.warning("explicit load of %r failed: %s", model, exc)
-            return False
-        if resp.status_code >= 400:
-            log.warning(
-                "explicit load of %r returned %s: %s",
-                model, resp.status_code, resp.text[:200],
-            )
-            return False
-        log.info("loaded %r on demand", model)
-        return True
+            return await self._backend.chat(_rewrite(request))
+        except BackendError as exc:
+            return _proxy_error(str(exc))
 
 
-def _is_model_load_error(resp: httpx.Response) -> bool:
-    """True if the backend rejected the request because the model wasn't loaded.
+def _rewrite(request: dict[str, Any]) -> dict[str, Any]:
+    """Apply the pass-through rewrites: pinned model, floored token budget.
 
-    Lemonade reports this as an `model_load_error` in an OpenAI-shaped error
-    body. Any other 4xx/5xx is a real failure and shouldn't trigger a reload.
+    Both exist because the firmware's values are baked in at flash time and
+    the backend behind this proxy changes far more often than the device does.
     """
-    if resp.status_code < 400:
-        return False
-    try:
-        error = resp.json().get("error")
-    except ValueError:
-        return False
-    if not isinstance(error, dict):
-        return False
-    return error.get("code") == "model_load_error"
+    patched = dict(request)
+    if config.PROXY_FORCE_MODEL:
+        patched["model"] = config.PROXY_FORCE_MODEL
+
+    floor = config.PROXY_MIN_MAX_TOKENS
+    if floor:
+        requested = patched.get("max_tokens")
+        # bool is an int subclass; a JSON `true` here is malformed input, not
+        # a budget.
+        valid = isinstance(requested, int) and not isinstance(requested, bool)
+        if not valid or requested < floor:
+            if valid:
+                log.debug("raising max_tokens %s → %s", requested, floor)
+            patched["max_tokens"] = floor
+    return patched
 
 
 def _proxy_error(message: str) -> dict[str, Any]:

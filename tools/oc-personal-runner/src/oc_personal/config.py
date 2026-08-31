@@ -36,22 +36,52 @@ BACKEND_TOKEN = os.environ.get("OC_BACKEND_TOKEN", "")
 # to a known-good backend model regardless of what the client requests —
 # the firmware still sends its baked-in kOcLocalModel name.
 # Empty string = forward whatever the client sent (legacy behavior).
-PROXY_FORCE_MODEL = os.environ.get("OC_PROXY_FORCE_MODEL", "gpt-oss-120b-Q4_K_M")
+# `coder` is a Lemonade tool-calling alias (verified ~4s). Do NOT use
+# `chat` — it does not exist on Lemonade and every passthrough 404s
+# (fixed 2026-08-30).
+PROXY_FORCE_MODEL = os.environ.get("OC_PROXY_FORCE_MODEL", "coder")
 
-# ── Anthropic side ──────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-# Default to current Sonnet. Overridable so the user can dial up to Opus
-# on lobsterboy without rebuilding.
-ANTHROPIC_MODEL = os.environ.get("OC_ANTHROPIC_MODEL", "claude-sonnet-4-7")
+# Floor for the forwarded token budget. The firmware hard-codes max_tokens=80
+# (src/config.h:kOcMaxTokens) and can only be changed by a reflash. Local
+# reasoning models spend their budget on a `reasoning_content` channel first
+# and emit visible `content` only after it closes — `chat` burned 283
+# completion tokens answering "why is the sky blue" in one sentence (measured
+# 2026-07-29). At 80 tokens the reply comes back as an empty string and the
+# device speaks nothing, so raise anything below this floor. The device only
+# ever reads `content`, so the extra budget buys reasoning the user never
+# hears. 0 disables the floor.
+PROXY_MIN_MAX_TOKENS = int(os.environ.get("OC_PROXY_MIN_MAX_TOKENS", "512"))
+
+# ── Agent model ─────────────────────────────────────────────────────────────
+# The agentic personal path runs on the same OpenAI-compat backend as the
+# passthrough — nothing here calls api.anthropic.com. `coder` is Lemonade's
+# tool-calling alias; it is the right pick over `chat` because the agent's job
+# is tool routing against a 10-tool schema, and `chat` burns an order of
+# magnitude more completion tokens on reasoning to reach the same call.
+AGENT_MODEL = os.environ.get("OC_AGENT_MODEL", "coder")
+
+# How long to wait on a backend reply. The agent replays up to 8 KB of tool
+# output per turn, so prefill alone can run tens of seconds on a large local
+# model — the old 30s httpx default was marginal.
+BACKEND_READ_TIMEOUT = float(os.environ.get("OC_BACKEND_READ_TIMEOUT", "60"))
 
 # ── Agent loop bounds ───────────────────────────────────────────────────────
 # Per PLAN.md Phase 8: cap at 4 inner agent steps. Keeps Jarvis's 10s
 # LLMClient timeout meaningful even when the agent decides to call brain_search
 # multiple times.
 MAX_AGENT_TURNS = int(os.environ.get("OC_MAX_TURNS", "4"))
-# Output cap so a chatty Claude reply doesn't push past the device's TTS
-# truncation boundary. ~80 tokens ≈ 60 words ≈ a 6-second voice response.
-MAX_OUTPUT_TOKENS = int(os.environ.get("OC_MAX_OUTPUT_TOKENS", "200"))
+# Per-turn completion budget. This is NOT the spoken-reply length: local
+# reasoning models spend most of it on a `reasoning_content` channel the agent
+# drops before TTS (299 completion tokens for a single tool call, measured on
+# `chat` 2026-07-29). Sized so a tool call can't be truncated mid-JSON; reply
+# brevity is enforced by SYSTEM_PROMPT, not by this cap.
+AGENT_MAX_TOKENS = int(os.environ.get("OC_AGENT_MAX_TOKENS", "1024"))
+# Bound on the *spoken* reply, which AGENT_MAX_TOKENS can no longer provide:
+# that budget has to stay large enough for a tool call to survive, so reply
+# length needs its own limit. 60 words ≈ the 6-second utterance the old
+# 200-token cap targeted. Trimming happens on a sentence boundary, so unlike
+# the old token cap this can't stop TTS mid-word. 0 disables trimming.
+REPLY_MAX_WORDS = int(os.environ.get("OC_REPLY_MAX_WORDS", "60"))
 
 # ── MCP server invocations ──────────────────────────────────────────────────
 # The agent spawns one stdio child per entry in MCP_SERVERS. Each entry is
@@ -156,7 +186,10 @@ EMAIL (personal Gmail):
 The user is talking to you over voice on a small embedded device. Replies are
 spoken aloud. Constraints:
 
-1. Be terse. 1–2 short sentences. No lists, no markdown, no preamble.
+1. Be terse. 1–2 short sentences, under 60 words total. No lists, no markdown,
+   no preamble, no sign-off, and no "would you like me to..." follow-up offers.
+   If a tool returns many items, speak only the most important one or two and
+   stop.
 2. WIKI READ: if the user is asking ABOUT their notes ("what do I know", "have
    I read", etc.) → use brain_search ONCE, synthesize, answer.
 3. PROJECT STATUS: if asking about a project's status or NEXT STEP ("what's

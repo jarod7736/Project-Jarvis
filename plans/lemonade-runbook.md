@@ -19,6 +19,7 @@ Operational state and remaining tasks for moving Jarvis onto Lemonade
 | CoreS3 firmware (kokoro TTS + tier fallback) | **flashed** | USB flash, hash verified |
 | `lemo_*` NVS provisioning | **done** | `[PROV] Saved lemo_key (64 chars…)` |
 | kokoro TTS on device | **live** | `speak: lemonade TTS in flight`, 86 KB MP3 played |
+| Passthrough model rewrite | **live** | `OC_PROXY_FORCE_MODEL=coder` (was `chat` — see §2.4) |
 
 Device: `jarvis.local` / **192.168.1.104**. Lemonade: **192.168.1.118:13305**.
 
@@ -26,22 +27,10 @@ Device: `jarvis.local` / **192.168.1.104**. Lemonade: **192.168.1.118:13305**.
 
 ## 2. lobsterboy — WHAT NEEDS DOING
 
-### 2.1 Return to `main` after PR #63 merges  ← the one real action item
+### 2.1 Return to `main` after PR #63 merges  ← DONE 2026-08-30
 
-lobsterboy is currently running the **PR branch**, not `main`. It was
-checked out to deploy the load-on-demand fix before the PR merged.
-
-```bash
-ssh lobsterboy
-cd ~/Project-Jarvis
-git checkout main && git pull
-sudo systemctl restart oc-personal.service
-systemctl is-active oc-personal.service          # expect: active
-curl -s localhost:8080/healthz | head -c 200     # expect: backend amd-halo:13305
-```
-
-Leaving it on the branch is not harmful, but it will silently diverge from
-`main` on the next unrelated deploy.
+lobsterboy is back on `main`; `oc-personal.service` restarted and healthy
+(`/healthz` reports `backend: http://amd-halo:13305`).
 
 ### 2.2 Facts worth knowing for any future deploy here
 
@@ -65,6 +54,20 @@ Leaving it on the branch is not harmful, but it will silently diverge from
 
 The load-on-demand fix is deployed and verified. No unit changes, no new
 secrets, no new services.
+
+### 2.4 2026-08-30 — passthrough 404 fixed + OpenClaw decommissioned
+
+- **`OC_PROXY_FORCE_MODEL` was `chat`, which does not exist on Lemonade.**
+  Every non-`oc-personal` request (the firmware's `local_llm`/`claude`
+  intents) returned `(upstream: backend HTTP 404)`. Changed the override to
+  `coder` (a Lemonade tool-calling alias, ~4s) and restarted the service.
+  `tools/oc-personal-runner/src/oc_personal/config.py` default updated to
+  match. The agent path already used `coder` and was unaffected.
+- **OpenClaw decommissioned.** All OpenClaw user units/timers stopped and
+  removed, binaries deleted, tailscale-serve `/` route dropped. The runner
+  never depended on it. `~/.openclaw/` data kept (inert). The daily AMD-brief
+  cron (which lived under `~/.openclaw/tools/`) was removed.
+- **Morning brief stopped** — agent response (~56s) exceeded the 60s timeout.
 
 ---
 
@@ -181,7 +184,7 @@ are the off-LAN fallback.
 
 - **Merge PR #63**, then do §2.1.
 - **2ndBrain correction (open):** `wiki/analyses/lemonade-model-runbook.md`
-  gives amd-halo as `192.168.1.61`, which does not answer. The live address
+  gives amd-halo as `192.168.1.118`, which does not answer. The live address
   is **192.168.1.118**. Left unedited because that vault is a separate repo.
 - **STT is not built.** `Whisper-Large-v3-Turbo` is installed on amd-halo
   and ready, but routing STT to it needs CoreS3 mic capture, PSRAM WAV

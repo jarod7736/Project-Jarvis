@@ -15,16 +15,24 @@ Type=simple
 User=__RUN_USER__
 WorkingDirectory=__PROJECT_ROOT__/tools/oc-personal-runner
 # Override the rest in a drop-in (/etc/systemd/system/oc-personal.service.d/override.conf)
-# rather than editing this file. ANTHROPIC_API_KEY especially should not live
+# rather than editing this file. OC_BACKEND_TOKEN especially should not live
 # in the unit text — use EnvironmentFile= pointing at a 0600-permissioned env file.
 Environment=OC_LISTEN_HOST=0.0.0.0
 Environment=OC_LISTEN_PORT=8080
 Environment=OC_BACKEND_URL=http://amd-halo:13305
-Environment=OC_PROXY_FORCE_MODEL=gpt-oss-120b-Q4_K_M
+# Both paths run on Lemonade. `coder` is the tool-calling alias — the agent
+# needs it, and the passthrough uses it too (`chat` does not exist on
+# Lemonade and 404s; fixed 2026-08-30).
+Environment=OC_PROXY_FORCE_MODEL=coder
+Environment=OC_AGENT_MODEL=coder
 Environment=OC_PERSONAL_MODEL=oc-personal
-Environment=OC_ANTHROPIC_MODEL=claude-sonnet-4-6
 Environment=OC_MAX_TURNS=4
-Environment=OC_MAX_OUTPUT_TOKENS=200
+Environment=OC_AGENT_MAX_TOKENS=1024
+# The firmware bakes in max_tokens=80, which a reasoning model spends entirely
+# on its hidden channel — the device would get an empty string. Floor it here.
+Environment=OC_PROXY_MIN_MAX_TOKENS=512
+# Spoken-reply bound, trimmed at a sentence boundary.
+Environment=OC_REPLY_MAX_WORDS=60
 Environment=BRAIN_VAULT_PATH=/srv/2ndbrain
 # OC_MCP_SERVERS is the JSON catalog of stdio MCP children the runner
 # spawns at startup. Each entry needs `command` and `args`; optional

@@ -207,7 +207,7 @@ strip only — not a markdown parser.
 
 - Record the gpt-oss autoload root cause and the proxy workaround in `CLAUDE.md`.
 - **2ndBrain correction, not applied here:** the runbook
-  `wiki/analyses/lemonade-model-runbook.md` gives amd-halo as `192.168.1.61`,
+  `wiki/analyses/lemonade-model-runbook.md` gives amd-halo as `192.168.1.118`,
   which does not answer; the live address is `192.168.1.118`. That vault is a
   separate repo, so this is left as a recommendation rather than an
   uncommitted edit in someone else's working tree.

@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "OpenAI-compat chat-completions front for Jarvis's oc-personal model: agent loop with brain-mcp + OpenAI-compat backend passthrough (Ollama / LM Studio / vLLM)."
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.40.0",
     "mcp>=1.0.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",

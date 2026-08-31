@@ -95,7 +95,7 @@ cmd_survey() {
         fi
     else
         info "Secrets file: ${SECRETS_FILE} — not present"
-        info "    Create with:  echo 'ANTHROPIC_API_KEY=sk-ant-...' | sudo tee ${SECRETS_FILE} && sudo chmod 600 ${SECRETS_FILE}"
+        info "    Create with:  echo 'OC_BACKEND_TOKEN=lemonade-...' | sudo tee ${SECRETS_FILE} && sudo chmod 600 ${SECRETS_FILE}"
     fi
 
     if [ -e "${SYSTEMD_UNIT_DIR}/oc-personal.service" ]; then
@@ -148,7 +148,7 @@ cmd_install() {
         warn "Secrets file missing: ${SECRETS_FILE}"
         info "After install, create it with:"
         info "  sudo install -d -m 0700 \"\$(dirname ${SECRETS_FILE})\""
-        info "  echo 'ANTHROPIC_API_KEY=sk-ant-...' | sudo tee ${SECRETS_FILE}"
+        info "  echo 'OC_BACKEND_TOKEN=lemonade-...' | sudo tee ${SECRETS_FILE}"
         info "  sudo chmod 600 ${SECRETS_FILE}"
         info "Then: sudo systemctl restart oc-personal.service"
     fi

@@ -7,8 +7,8 @@ Deployment (lobsterboy):
     .venv/bin/pip install -e .
 
     # Smoke test (foreground)
-    ANTHROPIC_API_KEY=sk-ant-... \\
     OC_BACKEND_URL=http://amd-halo:13305 \\
+    OC_BACKEND_TOKEN=lemonade-... \\
     OC_BRAIN_MCP_COMMAND=/home/$USER/project-jarvis/tools/brain-mcp/.venv/bin/python \\
         .venv/bin/python -m oc_personal.server
 
@@ -39,6 +39,7 @@ import uvicorn
 
 from . import config
 from .agent import BrainAgent
+from .backend import BackendClient
 from .proxy import OpenAICompatProxy
 
 logging.basicConfig(
@@ -51,29 +52,39 @@ log = logging.getLogger("oc_personal")
 # Module-level singletons populated in lifespan().
 agent: BrainAgent | None = None
 proxy: OpenAICompatProxy | None = None
+backend: BackendClient | None = None
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global agent, proxy
-    if not config.ANTHROPIC_API_KEY:
-        log.error("ANTHROPIC_API_KEY is not set; oc-personal calls will fail.")
+    global agent, proxy, backend
+    if not config.BACKEND_TOKEN:
+        log.warning(
+            "OC_BACKEND_TOKEN is not set; requests to %s will be unauthenticated.",
+            config.BACKEND_URL,
+        )
 
-    agent = BrainAgent()
-    proxy = OpenAICompatProxy()
+    # One HTTP client for both paths — the agent loop and the passthrough
+    # target the same backend.
+    backend = BackendClient()
+    agent = BrainAgent(backend)
+    proxy = OpenAICompatProxy(backend)
     async with agent.lifecycle():
         log.info(
-            "ready: listening on %s:%d, personal_model=%s, backend=%s",
+            "ready: listening on %s:%d, personal_model=%s, agent_model=%s, "
+            "proxy_model=%s, backend=%s",
             config.LISTEN_HOST,
             config.LISTEN_PORT,
             config.PERSONAL_MODEL,
+            config.AGENT_MODEL,
+            config.PROXY_FORCE_MODEL,
             config.BACKEND_URL,
         )
         try:
             yield
         finally:
-            if proxy is not None:
-                await proxy.aclose()
+            if backend is not None:
+                await backend.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -86,11 +97,12 @@ async def healthz() -> dict[str, Any]:
     return {
         "status": "ok",
         "personal_model": config.PERSONAL_MODEL,
-        "anthropic_model": config.ANTHROPIC_MODEL,
+        "agent_model": config.AGENT_MODEL,
+        "proxy_model": config.PROXY_FORCE_MODEL,
         "backend": config.BACKEND_URL,
-        "agent_ready": bool(agent and agent._sessions),
-        "mcp_servers": sorted(agent._sessions.keys()) if agent else [],
-        "tools": [t["name"] for t in (agent._tools_anthropic if agent else [])],
+        "agent_ready": bool(agent and agent.ready),
+        "mcp_servers": agent.server_names if agent else [],
+        "tools": agent.tool_names if agent else [],
     }
 
 
