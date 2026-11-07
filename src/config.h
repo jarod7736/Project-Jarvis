@@ -79,10 +79,10 @@ constexpr const char* kTimezoneDefault = "CST6CDT,M3.2.0,M11.1.0";
 
 // ── Connectivity tier probes (PLAN.md Phase 3) ────────────────────────────
 // Defaults from CLAUDE.md "External endpoints". Phase 4 (HA) and Phase 6
-// (OpenClaw) add NVS overrides at keys `ha_host` and `oc_host`.
+// (oc-personal runner) add NVS overrides at keys `ha_host` and `oc_host`.
 constexpr const char* kHaHostDefault       = "pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa";
 constexpr uint16_t    kHaPortDefault       = 443;   // Nabu Casa cloud HTTPS
-// OpenClaw default points at oc-personal-runner on lobsterboy's LAN IP.
+// The default points at oc-personal-runner on lobsterboy's LAN IP.
 // The canonical Tailscale URL (https://lobsterboy.tail1c66ec.ts.net)
 // doesn't resolve from the CoreS3 — the device isn't on Tailscale and
 // the router's DNS doesn't know *.ts.net. To use Tailscale, configure
@@ -95,30 +95,48 @@ constexpr const char* kOpenclawHostDefault = "http://192.168.1.178:8080";
 constexpr const char* kOpenclawProbeHost = "192.168.1.178";
 constexpr uint16_t    kOpenclawPortDefault = 8080;
 
-// ── OpenClaw model routing (PLAN.md Phase 6) ──────────────────────────────
+// ── oc-personal model routing (PLAN.md Phase 6) ──────────────────────────────
 // oc-personal-runner forwards any non-`oc-personal` model name to the
 // configured OpenAI-compat backend (env var OC_BACKEND_URL, default
 // Lemonade at http://amd-halo:13305). The local model name below must
 // match a model the backend has loaded, as it appears in
 // `GET /api/v1/models`.
-// In practice the runner's OC_PROXY_FORCE_MODEL rewrites this before
-// forwarding, so it's the fallback name rather than the live one — keep
-// them in sync anyway so the firmware doesn't lie about where it lands.
+// The runner's OC_PROXY_FORCE_MODEL rewrites this before forwarding, so
+// the name below is NOT what serves the request — the runner pins both
+// the passthrough and the agent loop to Lemonade's `coder` alias. This
+// constant is kept at the name the currently-flashed firmware sends
+// rather than being "corrected" to `coder`: changing it needs a reflash
+// to take effect, and a repo/device mismatch is worse than an inert
+// name. It only becomes load-bearing if OC_PROXY_FORCE_MODEL is cleared.
 constexpr const char* kOcLocalModel  = "gpt-oss-120b-Q4_K_M";
-// Claude routing: when NVS `anth_key` is set, the "claude" intent
-// dispatches directly to Anthropic via AnthropicClient. Otherwise it
-// falls through to the backend with this model name — which the
-// backend may or may not recognize.
+
+// Direct-to-Anthropic path, SEVERED. Set false to make IntentRouter skip
+// AnthropicClient entirely for the "claude" intent, regardless of whether
+// NVS `anth_key` is set. The client code, the NVS key, and the captive-
+// portal field all still exist and still work — this flag is the only
+// thing standing between them and a live call. Flip to true to restore.
+//
+// Consequence while false: "claude" is handled exactly like "local_llm"
+// — proxied to the local backend — so it requires LAN or TAILSCALE. On
+// HOTSPOT_ONLY it now returns the canned "can't reach my brain" line
+// instead of reaching Claude over the public internet. That tier has no
+// other backend, so severing the path necessarily costs it.
+constexpr bool kAnthropicDirectEnabled = false;
+
+// Model name sent for the "claude" intent. Inert: kAnthropicDirectEnabled
+// is false, and the runner rewrites this to `coder` anyway. If that pin is
+// ever cleared, this name reaches Lemonade, which does not have it, and
+// the intent 404s. Point it at a real backend model before clearing.
 constexpr const char* kOcClaudeModel = "claude-sonnet-4-6";  // TBD
-// Personal-mode model alias on OpenClaw — agent loop with brain-mcp
+// Personal-mode model alias on the oc-personal runner — agent loop with brain-mcp
 // tools attached (PLAN.md Phase 8). Same /v1/chat/completions wire
-// shape as the others; OpenClaw recognizes the model name and runs
+// shape as the others; the runner recognizes the model name and runs
 // brain_search / brain_capture / brain_lint / brain_ingest internally.
 // Until brain-mcp is deployed on lobsterboy this routes to a 404 and
 // the personal_query / journal_note paths fall back to ERR_PERSONAL_OFFLINE.
 constexpr const char* kOcPersonalModel = "oc-personal";
 
-// HTTP timeout for the OpenClaw call. PLAN.md says 10s; the Tailscale
+// HTTP timeout for the oc-personal call. PLAN.md says 10s; the Tailscale
 // network adds a small margin to that.
 constexpr uint32_t kOcHttpTimeoutMs = 12000;
 // Cap responses to a length that fits in TTS without dragging on. Lowered

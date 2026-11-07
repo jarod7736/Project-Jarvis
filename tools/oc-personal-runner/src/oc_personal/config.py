@@ -36,9 +36,17 @@ BACKEND_TOKEN = os.environ.get("OC_BACKEND_TOKEN", "")
 # to a known-good backend model regardless of what the client requests —
 # the firmware still sends its baked-in kOcLocalModel name.
 # Empty string = forward whatever the client sent (legacy behavior).
-# `coder` is a Lemonade tool-calling alias (verified ~4s). Do NOT use
-# `chat` — it does not exist on Lemonade and every passthrough 404s
-# (fixed 2026-08-30).
+#
+# Deliberately the SAME model as AGENT_MODEL below. `coder` is Lemonade's
+# tool-calling alias, which the agent loop requires; the passthrough does
+# not tool-call (it serves the firmware's plain-chat local_llm/claude
+# intents) and so would run on anything, but pointing both at one alias
+# keeps the whole stack on a single resident model. Lemonade's
+# max_models.llm is 2, so that leaves a free slot instead of consuming
+# both and risking an LRU eviction fight.
+#
+# Do NOT use `chat` — it does not exist on Lemonade and every passthrough
+# 404s (fixed 2026-08-30).
 PROXY_FORCE_MODEL = os.environ.get("OC_PROXY_FORCE_MODEL", "coder")
 
 # Floor for the forwarded token budget. The firmware hard-codes max_tokens=80

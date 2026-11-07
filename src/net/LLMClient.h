@@ -1,9 +1,9 @@
 #pragma once
 
-// LLMClient — Phase 6 OpenClaw client.
+// LLMClient — Phase 6 client for the oc-personal runner.
 //
 // Hits an OpenAI-compatible /v1/chat/completions endpoint. Used by the
-// IntentRouter for `local_llm` (small reasoning model on OpenClaw) and
+// IntentRouter for `local_llm` (local model behind the oc-personal runner) and
 // `claude` (Claude via the same gateway, model picked by the `model`
 // field).
 //

@@ -2,9 +2,13 @@
 
 // AnthropicClient — direct calls to api.anthropic.com /v1/messages.
 //
-// Used by the IntentRouter for the "claude" intent when the
-// `anth_key` NVS field is set. Falls through to LLMClient (LM Studio)
-// when the key is empty, so existing setups keep working unchanged.
+// CURRENTLY UNREACHABLE. IntentRouter used to call this for the
+// "claude" intent whenever the `anth_key` NVS field was set, falling
+// through to LLMClient when the key was empty. That dispatch is now
+// gated on config::kAnthropicDirectEnabled, which is false — so the
+// "claude" intent always takes the LLMClient path (oc-personal runner
+// → Lemonade) regardless of `anth_key`. This file is kept intact so
+// flipping that one flag restores the direct path.
 //
 // Wire shape:
 //   POST https://api.anthropic.com/v1/messages
@@ -41,9 +45,10 @@ namespace jarvis::net {
 
 class AnthropicClient {
 public:
-    // True iff NVS has anth_key set (non-empty). Routing layer uses
-    // this to decide between Anthropic direct vs LM Studio fallback
-    // for the "claude" intent.
+    // True iff NVS has anth_key set (non-empty). The routing layer
+    // still calls this, but only after config::kAnthropicDirectEnabled
+    // — so while that flag is false the result is discarded and a set
+    // key changes nothing.
     static bool isConfigured();
 
     // Send userPrompt to Anthropic, return the reply text. Empty

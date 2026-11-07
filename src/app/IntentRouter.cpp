@@ -282,7 +282,7 @@ RouteResult dispatchByIntent(const String& transcript, const String& intent,
         return {false, String(jarvis::config::kOtaSpeakFailed)};
     }
     if (intent == "personal_query" || intent == "journal_note") {
-        // Both intents go through OpenClaw's `oc-personal` model alias,
+        // Both intents go through the runner's `oc-personal` model alias,
         // which runs an agent loop with the brain-mcp tools attached on
         // lobsterboy (PLAN.md Phase 8). Lobsterboy is on Tailscale, so
         // HOTSPOT_ONLY can't reach it — bail before burning HTTP timeout
@@ -310,11 +310,16 @@ RouteResult dispatchByIntent(const String& transcript, const String& intent,
         //   - AnthropicClient hits api.anthropic.com — a public
         //     internet endpoint. Works on any non-OFFLINE tier
         //     (LAN, TAILSCALE, or HOTSPOT_ONLY all have internet).
-        //   - LLMClient (OpenClaw / LM Studio) lives on the home LAN
-        //     or via Tailscale. HOTSPOT_ONLY can't reach it, so we
-        //     bail with the canned "brain" response instead of
-        //     burning 5+ seconds on a doomed HTTP attempt.
-        if (intent == "claude" && jarvis::net::AnthropicClient::isConfigured()) {
+        //     Currently SEVERED by config::kAnthropicDirectEnabled, so
+        //     this branch is dead until that flag flips back to true.
+        //   - LLMClient (oc-personal runner → Lemonade) lives on the
+        //     home LAN or via Tailscale. HOTSPOT_ONLY can't reach it,
+        //     so we bail with the canned "brain" response instead of
+        //     burning 5+ seconds on a doomed HTTP attempt. With the
+        //     Anthropic path severed this is the only branch, which is
+        //     why "claude" no longer works on HOTSPOT_ONLY.
+        if (jarvis::config::kAnthropicDirectEnabled && intent == "claude" &&
+            jarvis::net::AnthropicClient::isConfigured()) {
             if (tier == jarvis::net::ConnectivityTier::OFFLINE) {
                 return {false, String("I can't reach my brain right now.")};
             }
@@ -363,7 +368,7 @@ RouteResult fallbackToKeyword(const String& transcript,
     // bails out.
     if (tier != jarvis::net::ConnectivityTier::OFFLINE &&
         jarvis::net::LLMClient::isConfigured()) {
-        Serial.println("[IntentRouter] no local match, asking OpenClaw");
+        Serial.println("[IntentRouter] no local match, asking the oc-personal runner");
         return dispatchByIntent(transcript, String("local_llm"),
                                 String(), String(), tier);
     }

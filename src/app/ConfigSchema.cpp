@@ -122,9 +122,11 @@ constexpr ConfigField kSchema[] = {
      true,  0, 0, 0, false, "", nullptr, 0},
 
     // ── Anthropic API direct (claude intent) ────────────────────────────
-    // When `anth_key` is set, IntentRouter routes the "claude" intent to
-    // api.anthropic.com directly via net/AnthropicClient. Empty key
-    // falls back to the OpenAI-compat path (LM Studio / OpenClaw).
+    // SEVERED — config::kAnthropicDirectEnabled is false, so setting
+    // these in the portal currently has no effect: the "claude" intent
+    // always takes the OpenAI-compat path (oc-personal runner →
+    // Lemonade). Fields are retained so a stored key survives until the
+    // flag is flipped back.
     {"anth_key",     "Anthropic API Key",  "network", FieldType::String,
      true,  0, 0, 0, false, "", nullptr, 0},
     {"anth_model",   "Anthropic Model",    "network", FieldType::String,

@@ -32,11 +32,11 @@ Mic (LLM Module)
       ├── Simple/fast command  → On-device handler (time, date, math, OTA)
       ├── HA action/query      → HA REST API (WiFi)
       ├── Complex reasoning    → oc-personal runner / local LLM (LAN/Tailscale)
-      ├── Creative / nuanced   → Claude (direct on hotspot, or via runner)
+      ├── Creative / nuanced   → same as above (Claude path severed; see Backends)
       ├── Personal query       → 2nd Brain RAG via oc-personal (lobsterboy)
       └── Journal note         → 2nd Brain capture via oc-personal (lobsterboy)
   → Response text → CoreS3
-  → TTS — cloud (OpenAI / ElevenLabs) by default, melotts on the LLM Module as fallback
+  → TTS — kokoro on Lemonade (amd-halo) by default; cloud (OpenAI / ElevenLabs) off-LAN; melotts on the LLM Module as last resort
   → CoreS3 display — shows transcript, status, readable data
 ```
 
@@ -50,7 +50,7 @@ Mic (LLM Module)
 |----|---------------------------------------|--------|--------------------------------------|
 |1   |On-device CoreS3 handler               |~instant|Time, date, math, OTA, canned replies |
 |2   |Local LLM via oc-personal runner (Lemonade) |1–3s LAN|Complex queries, multi-step reasoning |
-|3   |Claude via Anthropic API (direct on hotspot)|3–6s    |Creative, nuanced, full-intelligence  |
+|3   |~~Claude via Anthropic API (direct on hotspot)~~|—|**Severed** — flag-disabled, code retained|
 |4   |2nd Brain RAG via `oc-personal`        |3–8s    |Personal knowledge, voice notes       |
 |5   |Qwen 0.5B (offline fallback only)      |~instant|No network available                  |
 
@@ -62,7 +62,7 @@ The "OpenClaw" endpoint is now lobsterboy's `oc-personal-runner` (Phase 8) — a
 
 - **HA REST API** — light control, lock/unlock, sensor queries, automations
 - **oc-personal runner / Local LLM** — complex questions, multi-step tasks. Agent loop + passthrough on Lemonade (`coder` alias) at amd-halo.
-- **Claude API** — direct to `api.anthropic.com` on phone hotspot (or via the runner on LAN/Tailscale)
+- **Claude API** — **severed.** `config::kAnthropicDirectEnabled = false` stops `IntentRouter` from ever calling `AnthropicClient`; the code, the NVS `anth_key` field, and the portal input all remain, so flipping one flag restores it. The runner dropped its Anthropic dependency in `5116d57`, so nothing here reaches `api.anthropic.com` today. The `claude` intent is now served by Lemonade `coder` like any other local query — and therefore no longer works on HOTSPOT_ONLY.
 - **2nd Brain (`oc-personal`)** — personal knowledge wiki at `jarod7736/2ndBrain`. Read via `brain_search`, write via `brain_capture`. Runs as an MCP server (`tools/brain-mcp/`) on lobsterboy, fronted by an agent runner (`tools/oc-personal-runner/`) that drives the Lemonade `coder` model with the MCP tools attached.
 - **On-device** — timers, time/date, math, OTA, canned responses
 
@@ -75,7 +75,7 @@ WiFiMulti with graceful degradation:
 ```
 Home WiFi + LAN           → Full capability, lowest latency
 Phone hotspot + Tailscale → Full capability, cellular latency
-Phone hotspot only        → Claude API direct (no local LLM, no 2nd Brain)
+Phone hotspot only        → on-device handlers + Qwen only (Claude path severed)
 No network                → Qwen local only (offline tier)
 ```
 
@@ -142,8 +142,8 @@ Detailed per-phase design, retros, and validation gates live in [`PLAN.md`](PLAN
 ### Phase 6 — oc-personal / Local LLM Integration ✅
 
 - [x] Implement OpenAI-compatible HTTP client on CoreS3 (`net/LLMClient.cpp`)
-- [x] Provider-agnostic local backend — Ollama by default (PR #49), LM Studio still supported via NVS `oc_host`; `LM_STUDIO_TOKEN` forwarded as Bearer on passthrough (PR #37)
-- [x] Direct Anthropic API fallback for the `claude` intent on HOTSPOT_ONLY tier
+- [x] Provider-agnostic local backend (PR #49) — Lemonade on amd-halo today; the backend URL is `OC_BACKEND_URL` on the runner and NVS `oc_host` points the device at the runner. `OC_BACKEND_TOKEN` forwarded as Bearer on passthrough (PR #37, renamed from `LM_STUDIO_TOKEN` in `5116d57`)
+- [x] ~~Direct Anthropic API fallback for the `claude` intent on HOTSPOT_ONLY tier~~ — built, then severed via `config::kAnthropicDirectEnabled = false`. Code retained.
 - [ ] Streaming responses (deferred indefinitely — not blocking)
 
 ### Phase 7 — Polish & Reliability ✅ (closed for hardware-validation purposes)

@@ -4,7 +4,7 @@
 //
 // Sits alongside NVSConfig (namespace "jarvis") in a SEPARATE namespace
 // ("wifi") so that wiping WiFi creds from the captive-portal UI doesn't
-// touch HA tokens / OpenClaw keys / etc., and vice versa.
+// touch HA tokens / oc keys / etc., and vice versa.
 //
 // Holds up to kMaxNetworks slots, indexed by priority (0 == most recently
 // added / preferred). add() inserts at the front and pushes older entries

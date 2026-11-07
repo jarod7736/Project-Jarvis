@@ -16,8 +16,8 @@ namespace jarvis::net {
 
 enum class ConnectivityTier {
     OFFLINE       = 0,  // no WiFi association
-    HOTSPOT_ONLY  = 1,  // WiFi up, but neither HA nor OpenClaw reachable
-    TAILSCALE     = 2,  // OpenClaw reachable but not HA
+    HOTSPOT_ONLY  = 1,  // WiFi up, but neither HA nor the oc-personal runner reachable
+    TAILSCALE     = 2,  // oc-personal runner reachable but not HA
     LAN           = 3,  // HA reachable (the home-network case — covers both)
 };
 
@@ -36,7 +36,7 @@ public:
     static int    getRSSI();
 
     // Returns the cached tier if last check was within kTierRecheckMs;
-    // otherwise probes HA + OpenClaw and updates the cache. Probes are
+    // otherwise probes HA + the oc-personal runner and updates the cache. Probes are
     // synchronous TCP connects — call from loop()-driven code, never from a
     // callback. End-to-end probe time is bounded by kHaProbeMs + kOpenclawProbeMs.
     static ConnectivityTier getConnectivityTier();

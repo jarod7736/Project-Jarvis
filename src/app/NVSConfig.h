@@ -3,11 +3,11 @@
 // NVSConfig — thin wrapper over Preferences for the "jarvis" NVS namespace.
 //
 // Per CLAUDE.md: credentials live in NVS, namespace "jarvis", keys ≤15 chars.
-// Never hardcode WiFi/HA/OpenClaw secrets. First-run provisioning is via USB
+// Never hardcode WiFi/HA/agent-runner secrets. First-run provisioning is via USB
 // Serial JSON when `wifi0_ssid` is empty.
 //
 // This is the seed of `app/NVSConfig` that PLAN.md Phase 3 prescribes — only
-// the WiFi-slot-0 keys are wired up here; HA, OpenClaw, hotspot, and FW URL
+// the WiFi-slot-0 keys are wired up here; HA, the agent runner, hotspot, and FW URL
 // keys will land in their respective phases.
 
 #include <Arduino.h>
@@ -28,7 +28,7 @@ public:
     static String getHaHost();
     static bool   setHaHost(const String& host);
 
-    // OpenClaw (Phase 6). Same security pattern as HA; `oc_host` falls back
+    // oc-personal runner (Phase 6). Same security pattern as HA; `oc_host` falls back
     // to config::kOpenclawHostDefault.
     static String getOcKey();
     static bool   setOcKey(const String& key);
@@ -103,9 +103,11 @@ public:
     static String getMqttPass();
     static bool   setMqttPass(const String& pass);
 
-    // Anthropic API (the "claude" intent's direct path). When `anth_key`
-    // is set, IntentRouter routes claude intents to api.anthropic.com
-    // via net/AnthropicClient instead of falling through to LM Studio.
+    // Anthropic API (the "claude" intent's direct path). SEVERED —
+    // config::kAnthropicDirectEnabled is false, so IntentRouter ignores
+    // these keys entirely and claude intents go to the oc-personal
+    // runner (Lemonade) like any other query. Kept so the path can be
+    // restored by flipping that flag without re-provisioning.
     // `anth_model` defaults to a Haiku model when unset — fast/cheap
     // for short voice replies; user can override to Sonnet/Opus via
     // the captive portal. Both keys are <=15 chars.

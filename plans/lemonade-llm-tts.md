@@ -43,7 +43,7 @@ Measured against the live server during design, not assumed:
 | API base | `/api/v1`, `Authorization: Bearer <key>` |
 | Lemonade version | `10.5.1` |
 | `max_models` | `llm: 2`, `tts: 2`, `transcription: 2` |
-| Resident at design time | `Qwen3-Coder-30B`, 2 embedding models, `Z-Image-Turbo`, **`kokoro-v1`** |
+| Resident at design time | `Qwen3-Coder-30B`, 2 embedding models, `Z-Image-Turbo`, **`kokoro-v1`** — historical; that checkpoint now sits behind the `coder` alias and has since been upgraded to `Qwen3.8-27B` |
 | kokoro MP3 output | `200`, 97 KB, `audio/mpeg`, 24 kHz mono 160 kbps, ~1.9 s for a full sentence |
 | kokoro WAV output | 465 KB, IEEE float — rejected, see below |
 | gpt-oss after explicit load | loads in 35.7 s; **0.87 s** end-to-end through `oc-personal` |
@@ -76,7 +76,7 @@ In `proxy.py`, when the backend returns a `model_load_error`, POST
 once. On a second failure, surface the error as today.
 
 This implements "it should load upon request", survives `lemond` restarts, and
-with `max_models.llm = 2` gpt-oss then stays resident alongside Qwen3-Coder —
+with `max_models.llm = 2` gpt-oss then stays resident alongside `coder` —
 "loaded almost all the time".
 
 **Known limitation, accepted:** this only fixes traffic through `oc-personal`
@@ -207,7 +207,7 @@ strip only — not a markdown parser.
 
 - Record the gpt-oss autoload root cause and the proxy workaround in `CLAUDE.md`.
 - **2ndBrain correction, not applied here:** the runbook
-  `wiki/analyses/lemonade-model-runbook.md` gives amd-halo as `192.168.1.118`,
+  `wiki/analyses/lemonade-model-runbook.md` gives amd-halo as `192.168.1.61`,
   which does not answer; the live address is `192.168.1.118`. That vault is a
   separate repo, so this is left as a recommendation rather than an
   uncommitted edit in someone else's working tree.

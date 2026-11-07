@@ -317,7 +317,7 @@ ConnectivityTier WiFiManager::getConnectivityTier() {
 
     // Probe both backends so the tier reflects what's actually reachable.
     // Originally we short-circuited on HA reachable → LAN, but that hid
-    // OpenClaw failures (e.g. CoreS3 not on Tailscale → can't resolve
+    // oc-personal failures (e.g. CoreS3 not on Tailscale → can't resolve
     // *.ts.net) when HA cloud was up. The router branches on this:
     // local_llm/claude calls require OC; HA dispatch requires HA. Routing
     // can fail silently if the tier reports "ok" without the right
