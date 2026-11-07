@@ -45,6 +45,12 @@ def _rewrite(request: dict[str, Any]) -> dict[str, Any]:
     if config.PROXY_FORCE_MODEL:
         patched["model"] = config.PROXY_FORCE_MODEL
 
+    if config.PROXY_DISABLE_THINKING:
+        # Merge rather than overwrite: a caller may already pass template kwargs.
+        kwargs = dict(patched.get("chat_template_kwargs") or {})
+        kwargs.setdefault("enable_thinking", False)
+        patched["chat_template_kwargs"] = kwargs
+
     floor = config.PROXY_MIN_MAX_TOKENS
     if floor:
         requested = patched.get("max_tokens")

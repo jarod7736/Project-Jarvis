@@ -60,6 +60,21 @@ PROXY_FORCE_MODEL = os.environ.get("OC_PROXY_FORCE_MODEL", "coder")
 # hears. 0 disables the floor.
 PROXY_MIN_MAX_TOKENS = int(os.environ.get("OC_PROXY_MIN_MAX_TOKENS", "512"))
 
+# Disable the model's reasoning channel on pass-through requests. The device asks
+# for one short spoken sentence, and a reasoning model will otherwise spend the
+# entire token floor thinking and return an empty `content` — which the firmware
+# reports as "I can't reach my brain right now." Measured on Qwen3.8-27B via
+# Lemonade 2026.45.3: 501 completion tokens of reasoning and `content: ''` at the
+# 512 floor (22 s), versus 20 tokens and 1.5 s with thinking off.
+#
+# Opt-in rather than always-on: this is a llama.cpp/Qwen chat-template knob, and
+# a backend that doesn't accept it (Ollama, vLLM) should leave it unset. Only the
+# pass-through path is affected — the agent loop keeps thinking, because it needs
+# it for tool routing.
+PROXY_DISABLE_THINKING = os.environ.get(
+    "OC_PROXY_DISABLE_THINKING", "0"
+).strip().lower() in ("1", "true", "yes", "on")
+
 # ── Agent model ─────────────────────────────────────────────────────────────
 # The agentic personal path runs on the same OpenAI-compat backend as the
 # passthrough — nothing here calls api.anthropic.com. `coder` is Lemonade's
