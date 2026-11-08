@@ -161,8 +161,9 @@ saying the same, since a repo-level disable is invisible in the file.
 **Decided (2026-11-07): run ingest on amd-halo, not in Actions.** The GitHub
 workflow stays disabled — it is replaced, not repaired. amd-halo's checkout
 becomes the *designated writer*: it pulls, ingests new `raw/` with Lemonade
-`coder`, and pushes `wiki/ index.md log.md`. Everything else is a pull-only
-client. This removes the reachability problem by removing it (ingest runs where
+`coder`, and pushes `wiki/ index.md log.md`. Clients pull the wiki and may push
+`raw/` only — content enters the system the same way on every machine: clip or
+drop a file into `raw/`, commit, push; amd-halo picks it up on its next pull. This removes the reachability problem by removing it (ingest runs where
 the model runs) at the cost of run history living in `journalctl` rather than
 the Actions UI.
 

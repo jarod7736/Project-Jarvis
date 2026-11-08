@@ -257,8 +257,12 @@ The rule that follows:
   just cleaned up was exactly this, so treat it as a standing rule rather than
   a lesson from one incident. Repo backups go to Garage (`git bundle`), which
   is object storage and never mounted as a working tree.
-- Every copy is a clone with one of two roles: a **writer** (pull → edit →
-  commit → push) or a **read-only mirror** (pull only, never commit).
+- Every copy is a clone with exactly one role:
+  - **publish writer** — amd-halo. The only place `wiki/`, `index.md` and
+    `log.md` are written; runs ingest and pushes the result.
+  - **raw contributor** — Mac and Windows. Pulls the wiki, and may commit
+    **only `raw/`**: clip, drop a file, push. Ingest on amd-halo does the rest.
+  - **read-only mirror** — anything else (lobsterboy today, until retired).
 - **Exactly one writer, and one git actor per checkout.** amd-halo's clone is the
   designated writer — it runs the ingest service *and* hosts the agent, so
   `brain-mcp`'s `brain_capture` lands in the same `raw/` the ingest publishes
