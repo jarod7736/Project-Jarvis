@@ -152,8 +152,11 @@ been dead for a long time.
 **This is not a one-line model swap.** The workflow runs on
 `ubuntu-latest` (GitHub-hosted), and Lemonade lives on amd-halo at
 `192.168.1.118:13305` — LAN and tailnet only. A hosted runner cannot reach it.
-Changing `on:` to a push trigger (done in `637b988`) means raw pushes now fire a
-job that fails until this is resolved.
+**The workflow is disabled at the repo level** (`gh workflow disable
+daily-brain-ingest.yml`, 2026-11-07), so the `raw/**` push trigger no longer
+queues runs; re-enable with `gh workflow enable daily-brain-ingest.yml` only
+once one of the shapes below is in place. The YAML carries a header comment
+saying the same, since a repo-level disable is invisible in the file.
 
 Two viable shapes:
 
