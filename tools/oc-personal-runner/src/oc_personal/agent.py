@@ -32,6 +32,7 @@ import json
 import logging
 import re
 import shlex
+import time
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -210,7 +211,13 @@ class BrainAgent:
                         payload["chat_template_kwargs"] = {
                             "enable_thinking": False,
                         }
+                    _t0 = time.perf_counter()
                     resp = await self._backend.chat(payload)
+                    log.info(
+                        "agent turn %d/%d: backend %.2fs",
+                        _turn + 1, config.MAX_AGENT_TURNS,
+                        time.perf_counter() - _t0,
+                    )
                 except BackendError as exc:
                     log.warning("agent backend call failed: %s", exc)
                     return _openai_error(str(exc))
