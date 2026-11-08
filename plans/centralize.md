@@ -1,6 +1,6 @@
 # Centralize the personal agent on amd-halo
 
-**Status:** §7.7 executed 2026-11-08 — the runner is live on amd-halo (port 17707, `/healthz` 12 tools). §7.1–7.6 done earlier (see `plans/todo.md` §E). §7.8–7.10 open; 7.8 is blocked on the device's `oc_host` probe.
+**Status:** §7.1–7.9 done 2026-11-08 — the runner is live on amd-halo (port 17707, `/healthz` 12 tools) and the device reaches it end-to-end (~6 s per query). §7.10 (retire lobsterboy) is the only item left, deliberately deferred a week.
 **Captured:** 2026-11-07
 **Trigger:** "oc-personal should maybe move to amd-halo to centralize these services."
 
@@ -187,24 +187,32 @@ Reconcile first, migrate second. Do not invert.
       - **Extra fix:** the three pyprojects pinned `mcp<2` — fresh venvs pulled
         `mcp` 2.x, which renamed `FastMCP`→`MCPServer` and crash-looped the
         runner (`brain-mcp` child died → `Connection closed` → exit 3).
-- [ ] **7.8 Repoint the device.** NVS `oc_host` → `http://192.168.1.118:17707`
-      via captive portal or serial provisioning. No reflash.
-      **BLOCKED 2026-11-08:** the value was set but the device still says
-      "can't reach my notes". `getConnectivityTier()` TCP-probes `oc_host`; when
-      that fails the router short-circuits `personal_query` to
-      `kErrPersonalOffline` *before* any HTTP call — and neither host sees a
-      request from the device. Firewall, LAN path, secrets-blanking and TLS
-      misuse all ruled out. Needs the device's real `oc_host`, readable only from
-      the serial console (`[OC] host=<value>` on boot). Watch the scheme:
-      `makeUrl()` prepends `https://` when the value has none, while the probe
-      assumes `http` — so the value must be `http://192.168.1.118:17707`.
-- [ ] **7.9 Verify on hardware** — blocked on 7.8. Wake word, one passthrough
-      question, one `personal_query`, one calendar or inbox read. (The
-      server-side equivalents already pass against amd-halo:127.0.0.1.)
+- [x] **7.8 Repoint the device** — done 2026-11-08. NVS `oc_host` =
+      `http://192.168.1.118:17707` via the captive portal; no reflash.
+      The serial console (`[OC] host=` on boot, then
+      `[WIFI] probe: HA=ok OC=ok (target=192.168.1.118:17707)`) proved the value
+      and the tier probe were **already correct**. The real failure was
+      downstream: `[LLMClient] POST …` immediately followed by
+      `returnError(): error(-11): read Timeout` — the agent turn simply outran
+      the device's 12 s `kOcHttpTimeoutMs` (`src/config.h`). The runner logged
+      `200 OK` for a request the CoreS3 had already abandoned, so the user heard
+      "I can't reach my notes". Fixing the host/port, the firewall, the secrets
+      or the tier logic would all have been wrong.
+- [x] **7.9 Verify on hardware** — done 2026-11-08. Wake word → keyword
+      classifier → `personal_query` → runner `200` → spoken reply with real
+      calendar data: *"Just birthdays this week: Katie Weers today, Finn and
+      Olivia Tuesday…"*. ~6 s end-to-end, inside the 12 s window. (Passthrough
+      checked server-side; it is the same `LLMClient` path.)
+      **Latency had to be fixed first — 50 s → 6 s, three commits:**
+      `1a378f0` adds `OC_AGENT_DISABLE_THINKING=1` (12.6 s → 3.1 s per turn,
+      producing an identical `gcal_list_events` call); `12f7533` moves the
+      volatile clock off the system prompt so llama.cpp's prefix cache survives
+      (turn 1: 12.5 s → 3.5 s); `90057a0` adds the per-turn timing log that
+      found it. **No firmware change was needed.**
 - [ ] **7.10 Retire the lobsterboy copy** of `oc-personal` (unit + drop-in).
       Keep the drop-in backup until the new box has run for a week.
-      **Do not retire while 7.8 is broken** — lobsterboy is currently the only
-      path that reaches the device.
+      Unblocked as of 7.9 — the device reaches amd-halo, so lobsterboy is no
+      longer the only working path.
 
 ---
 

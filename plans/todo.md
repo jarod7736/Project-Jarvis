@@ -24,6 +24,11 @@ died at 7% on this weak signal — runbook §4.1).
       calendar 6.8–16.6 s (the 16.6 s case made two `gcal` calls). Raising it
       costs UX — the FSM blocks behind "Thinking…" — so prefer fixing the two
       server-side causes below before raising this.
+      **Update 2026-11-08:** the warm agent path is now ~6 s (thinking disabled +
+      a working prompt cache), so the 12 s window holds and **no reflash is
+      needed**. The only case still over budget is a cold prompt cache — the
+      first request after a `lemond` restart, ~17 s — which is rare and the sole
+      remaining reason to touch this.
 - [ ] **Ignore Qwen's `query` for `claude` / `local_llm`.** `IntentRouter`
       dispatches with `query.length() ? query : transcript`, so a 0.5B model's
       paraphrase can replace what the user actually said. Those intents mean
@@ -127,13 +132,12 @@ pages, unioned `index.md`/`log.md`, and recomputed the counts.
 - [x] Install `brain-mcp` first, then `google-mcp`, then `oc-personal`; rewrite
       `OC_MCP_SERVERS` paths and `BRAIN_VAULT_PATH`; move the Google creds and
       recreate the token-refresh cron; verify 12 tools on `/healthz`.
-- [ ] **Device repoint still broken.** NVS `oc_host` was set to
-      `http://192.168.1.118:17707` (17707, **not** 8080 — that's Open WebUI's),
-      but the device still says "can't reach my notes". Its tier probe to
-      `oc_host` fails, so `personal_query` short-circuits before any HTTP call —
-      neither host sees a request from the device. Firewall/LAN/secrets all ruled
-      out. Needs the device's actual `oc_host` read over the serial console.
-      See `plans/centralize.md` §7.8.
+- [x] **Device repoint done 2026-11-08.** NVS `oc_host` =
+      `http://192.168.1.118:17707` (17707, **not** 8080 — that's Open WebUI's).
+      "Can't reach my notes" was **not** a reachability problem: the tier probe
+      was fine; the agent turn just outran the device's 12 s read timeout. Fixed
+      server-side (thinking off + prompt cache) — 50 s → ~6 s — and verified
+      spoken on hardware. See `plans/centralize.md` §7.8–7.9.
 - [x] Constraint noted: MCP is stdio-only, so the runner and both MCP servers
       move together.
 
