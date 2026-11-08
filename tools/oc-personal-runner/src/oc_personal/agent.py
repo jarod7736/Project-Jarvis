@@ -181,6 +181,11 @@ class BrainAgent:
             # The model has no clock; without this prefix it invents a date
             # near its training cutoff and asks the calendar tool about the
             # wrong day. America/Chicago matches the primary Google Calendar tz.
+            # NOTE: this block goes on the USER turn below, never the system
+            # turn. It changes every minute, and anything volatile at the start
+            # of the system prefix defeats llama.cpp's prompt cache — the whole
+            # ~4k-token system+tools prefix then re-prefills on every request
+            # (~12.5s on Qwen3.8-27B, measured 2026-11-08).
             now = datetime.now(ZoneInfo("America/Chicago"))
             date_prefix = (
                 f"Current date: {now.strftime('%A %Y-%m-%d')}. "
@@ -189,8 +194,8 @@ class BrainAgent:
                 f"resolve against this date.\n\n"
             )
             messages: list[dict[str, Any]] = [
-                {"role": "system", "content": date_prefix + config.SYSTEM_PROMPT},
-                {"role": "user", "content": user_text},
+                {"role": "system", "content": config.SYSTEM_PROMPT},
+                {"role": "user", "content": date_prefix + user_text},
             ]
 
             final_text = ""
