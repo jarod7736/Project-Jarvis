@@ -142,6 +142,40 @@ of operations in `plans/centralize.md` §5–7.
       (`ConfigSchema.cpp`). User-visible strings, not comments; "Agent Runner
       URL/Key" matches reality.
 
+## I. Brain-ingest CI is broken — parked 2026-11-07
+
+`daily-brain-ingest.yml` has been failing on every run (~20 s each; last six
+runs all failed). It runs `claude -p …` with `ANTHROPIC_API_KEY`, which is the
+only secret in the repo (created 2026-05-11) — no tokens available, so it has
+been dead for a long time.
+
+**This is not a one-line model swap.** The workflow runs on
+`ubuntu-latest` (GitHub-hosted), and Lemonade lives on amd-halo at
+`192.168.1.118:13305` — LAN and tailnet only. A hosted runner cannot reach it.
+Changing `on:` to a push trigger (done in `637b988`) means raw pushes now fire a
+job that fails until this is resolved.
+
+Two viable shapes:
+
+- **A. Self-hosted runner on amd-halo (recommended).** `runs-on: [self-hosted,
+  …]`, call `http://127.0.0.1:13305` with model `coder`. No tunnel, no exposure,
+  no availability cost (amd-halo must be up anyway to serve the model).
+  No runner is installed on either box today. `opencode` 1.18.32 is already on
+  amd-halo (`~/.opencode/bin/opencode`, config under `~/.config/opencode/`) and
+  is the closest drop-in for `claude -p`; the alternative is Claude Code via
+  CCR, which they already use elsewhere.
+- **B. Hosted runner + Tailscale.** Add `tailscale/github-action` with an
+  ephemeral auth key, then reach the tailnet IP. Needs a Tailscale OAuth client,
+  a tag, an ACL entry for amd-halo:13305, and new repo secrets. More moving
+  parts for no availability gain.
+
+Still open: which harness drives the ingest (opencode vs Claude-via-CCR vs a
+bespoke tool-loop script), and whether the ingest should stay LLM-driven at all.
+
+Blocked knock-on: the Mac clone has 6 raw files committed locally (`6f42026`)
+and unpushed — pushing them triggers an ingest run that fails until this is
+fixed, so hold the push.
+
 ---
 
 ## Done in this session (context for the above)
