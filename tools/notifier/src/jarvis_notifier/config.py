@@ -11,7 +11,8 @@ import os
 
 # ── HTTP listener ───────────────────────────────────────────────────────────
 LISTEN_HOST = os.environ.get("NOTIFIER_LISTEN_HOST", "0.0.0.0")
-# 8081 so it sits next to oc-personal-runner on 8080 without colliding.
+# 8081 — distinct from the oc-personal-runner port (17707 on amd-halo) and
+# from 8080, which is reserved for the Open WebUI container.
 LISTEN_PORT = int(os.environ.get("NOTIFIER_LISTEN_PORT", "8081"))
 
 # ── MQTT broker (HA Mosquitto add-on or any 1883/anon broker) ───────────────

@@ -1,8 +1,10 @@
 """Environment-driven configuration for morning-brief.
 
-Both target services run on the same lobsterboy host so localhost URLs
-are the right defaults. Override via the systemd unit's Environment=
-lines (or export before running manually).
+The notifier shares this host, so its localhost default is correct. The
+oc-personal runner is NOT co-located any more — it moved to amd-halo
+(plans/centralize.md §7.7), so OC_PERSONAL_URL points across hosts.
+Override via the systemd unit's Environment= lines (or export before
+running manually).
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import os
 # Where to POST the chat-completions request. The oc-personal-runner
 # listens here; model=oc-personal triggers the agent loop (brain + gcal
 # + gmail tools attached).
-OC_PERSONAL_URL = os.environ.get("OC_PERSONAL_URL", "http://localhost:8080")
+OC_PERSONAL_URL = os.environ.get("OC_PERSONAL_URL", "http://192.168.1.118:17707")
 OC_PERSONAL_MODEL = os.environ.get("OC_PERSONAL_MODEL", "oc-personal")
 
 # Where to POST the brief. The notifier service routes by tier and

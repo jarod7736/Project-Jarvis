@@ -15,7 +15,7 @@ PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${PKG_DIR}/../.." && pwd)"
 BRAIN_MCP_DIR="${PROJECT_ROOT}/tools/brain-mcp"
 
-LISTEN_PORT="${OC_LISTEN_PORT:-8080}"
+LISTEN_PORT="${OC_LISTEN_PORT:-17707}"
 BACKEND_URL="${OC_BACKEND_URL:-http://amd-halo:13305}"
 FORCE_MODEL="${OC_PROXY_FORCE_MODEL:-coder}"
 VENV_DIR="${VENV_DIR:-${PKG_DIR}/.venv}"

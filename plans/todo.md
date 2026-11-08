@@ -120,24 +120,28 @@ pages, unioned `index.md`/`log.md`, and recomputed the counts.
 
 ## G. Move `oc-personal` to amd-halo
 
-Blocked on nothing now that the vault is reconciled. Full inventory and order
-of operations in `plans/centralize.md` §5–7.
+**Server side DONE 2026-11-08** — runner live on amd-halo, port 17707, 12 tools,
+`agent_ready:true`, Google token-refresh cron moved. Detail in
+`plans/centralize.md` §7.7.
 
-- [ ] Install `brain-mcp` first, then `google-mcp`, then `oc-personal`; rewrite
+- [x] Install `brain-mcp` first, then `google-mcp`, then `oc-personal`; rewrite
       `OC_MCP_SERVERS` paths and `BRAIN_VAULT_PATH`; move the Google creds and
-      recreate the token-refresh cron; update NVS `oc_host` to
-      `192.168.1.118:8080` (no reflash); verify 12 tools on `/healthz` and one
-      real query from the device.
-- [ ] Remember the constraint: MCP is stdio-only, so the runner and both MCP
-      servers move together.
+      recreate the token-refresh cron; verify 12 tools on `/healthz`.
+- [ ] **Device repoint still broken.** NVS `oc_host` was set to
+      `http://192.168.1.118:17707` (17707, **not** 8080 — that's Open WebUI's),
+      but the device still says "can't reach my notes". Its tier probe to
+      `oc_host` fails, so `personal_query` short-circuits before any HTTP call —
+      neither host sees a request from the device. Firewall/LAN/secrets all ruled
+      out. Needs the device's actual `oc_host` read over the serial console.
+      See `plans/centralize.md` §7.8.
+- [x] Constraint noted: MCP is stdio-only, so the runner and both MCP servers
+      move together.
 
 ## H. Housekeeping
 
-- [ ] **Push `main`.** It is 3 commits ahead of GitHub: `efcff3f` (deploy
-      default), `9fcf92a` (pending tree: Anthropic severance, docs, comment
-      sweep, centralize plan), `59c8e3d` (disable reasoning on passthrough).
-      lobsterboy already runs `59c8e3d`, deployed by bundle, clean — a push
-      followed by `git pull` there will match exactly.
+- [x] **Push `main`.** Done 2026-11-08 (`5116d57..6dd1f23`, then `03da4ec`).
+      The push also carried the plan/todo docs and the `mcp<2` dependency pin;
+      amd-halo's checkout was fast-forwarded to match.
 - [ ] **Captive-portal labels still read "OpenClaw URL" / "OpenClaw Key"**
       (`ConfigSchema.cpp`). User-visible strings, not comments; "Agent Runner
       URL/Key" matches reality.

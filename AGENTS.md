@@ -64,9 +64,11 @@ does not ship it. Use `uploadfs`.
 
 ## Python tools
 
-Five Python tool packages under `tools/`, deployed to lobsterboy:
-`brain-mcp`, `google-mcp`, `morning-brief`, `notifier`, `oc-personal-runner`.
-Only four ship a systemd unit — see below.
+Five Python tool packages under `tools/`. Since the 2026-11-08 amd-halo
+migration (`plans/centralize.md` §7.7) the agent stack — `brain-mcp`,
+`google-mcp`, `oc-personal-runner` — runs on **amd-halo**; `notifier` and
+`morning-brief` stay on **lobsterboy**. Only four ship a systemd unit — see
+below.
 
 Shared convention: `src/` layout, `hatchling`, `requires-python = ">=3.11"`, a
 `[project.scripts]` console entry, and an editable install into a per-tool venv
@@ -75,7 +77,7 @@ workspace file — each tool is standalone.
 
 ```bash
 tools/<name>/deploy.sh survey    # read-only audit; the default subcommand
-tools/<name>/deploy.sh install   # venv + pip install -e, writes systemd units (interactive, sudo)
+tools/<name>/deploy.sh install   # venv + pip install -e, writes systemd units (interactive read -p + sudo; cannot be piped)
 tools/<name>/deploy.sh test      # smoke test against the running service
 ```
 
@@ -89,8 +91,12 @@ Things that will bite:
   crash-loops the service.
 - `oc-personal-runner` requires `brain-mcp`'s venv to already exist. Install
   `brain-mcp` first.
-- `oc-personal-runner` reads `OC_BACKEND_TOKEN` from
-  `/etc/oc-personal/secrets.env` (0600), not from the unit file.
+- `oc-personal-runner` reads `OC_BACKEND_TOKEN` from an `EnvironmentFile=`,
+  not from the unit text. The checked-in unit points at
+  `/etc/oc-personal/secrets.env` (root-only, prefix `-` so a miss is ignored);
+  the **amd-halo** drop-in overrides it with
+  `~/.config/oc-personal/secrets.env` (0600, user-owned) because that host's
+  `/etc/oc-personal/` is not readable by the service user.
 - `google-mcp` ships **no systemd unit** — it is a stdio child of
   `oc-personal-runner` (referenced via `OC_MCP_SERVERS`). Its `deploy.sh` only
   builds the venv, and it needs a one-time OAuth consent

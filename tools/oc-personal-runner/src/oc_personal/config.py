@@ -11,7 +11,7 @@ import os
 
 # ── HTTP listener ───────────────────────────────────────────────────────────
 LISTEN_HOST = os.environ.get("OC_LISTEN_HOST", "0.0.0.0")
-LISTEN_PORT = int(os.environ.get("OC_LISTEN_PORT", "8080"))
+LISTEN_PORT = int(os.environ.get("OC_LISTEN_PORT", "17707"))
 
 # ── Model alias for the agentic personal-mode path ──────────────────────────
 # Must match firmware src/config.h:kOcPersonalModel exactly.

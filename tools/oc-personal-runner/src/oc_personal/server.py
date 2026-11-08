@@ -1,6 +1,6 @@
 """FastAPI entry point for oc-personal-runner.
 
-Deployment (lobsterboy):
+Deployment (amd-halo):
 
     cd ~/project-jarvis/tools/oc-personal-runner
     python -m venv .venv
@@ -13,7 +13,7 @@ Deployment (lobsterboy):
         .venv/bin/python -m oc_personal.server
 
     # Then from another shell:
-    curl -s http://localhost:8080/v1/chat/completions \\
+    curl -s http://localhost:17707/v1/chat/completions \\
         -H 'Content-Type: application/json' \\
         -d '{"model":"oc-personal","messages":[{"role":"user","content":"what do I know about kettlebells"}]}' | jq .
 
@@ -21,8 +21,9 @@ Production: install the systemd unit at tools/oc-personal-runner/systemd/
 oc-personal.service and `systemctl enable --now oc-personal.service`.
 
 Once running, point Jarvis's NVS `oc_host` at this server's URL — e.g.
-http://lobsterboy.tail1c66ec.ts.net:8080 — and Jarvis's existing personal_query
-and journal_note intents wire up end-to-end.
+http://192.168.1.118:17707 — and Jarvis's existing personal_query and
+journal_note intents wire up end-to-end. Use the LAN IP, not a MagicDNS
+name: the CoreS3 cannot resolve `*.ts.net`.
 """
 
 from __future__ import annotations

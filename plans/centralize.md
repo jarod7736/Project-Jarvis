@@ -1,6 +1,6 @@
 # Centralize the personal agent on amd-halo
 
-**Status:** captured, not started. Revisit later.
+**Status:** §7.7 executed 2026-11-08 — the runner is live on amd-halo (port 17707, `/healthz` 12 tools). §7.1–7.6 done earlier (see `plans/todo.md` §E). §7.8–7.10 open; 7.8 is blocked on the device's `oc_host` probe.
 **Captured:** 2026-11-07
 **Trigger:** "oc-personal should maybe move to amd-halo to centralize these services."
 
@@ -57,7 +57,7 @@ forwards prompts.
 | RAM | 125 GiB total, 78 GiB available |
 | Load average | 0.22 / 0.26 / 0.27 |
 | Disk | 89 GiB free — **96% used, worth watching** |
-| Port 8080 | free |
+| Port 8080 | free — **reserved for the Open WebUI container** (netmon already probes `192.168.1.118:8080/health` for it); the runner uses **17707** |
 | `loginctl` `Linger` | yes (user units survive logout and boot) |
 | python3 | 3.13.5, `venv` OK (repo requires >=3.11) |
 | GitHub SSH | authenticated for `jarod7736` |
@@ -148,37 +148,63 @@ merge, not a fast-forward.
 
 Reconcile first, migrate second. Do not invert.
 
-- [ ] **7.1 Back up both trees** (`tar czf` outside the repos) and record the
+- [x] **7.1 Back up both trees** (`tar czf` outside the repos) and record the
       exact HEADs.
-- [ ] **7.2 Triage amd-halo's dirty tree.** Decide on the
+- [x] **7.2 Triage amd-halo's dirty tree.** Decide on the
       `Deliberate Practice.md` deletion and the 8 untracked daily briefs; commit
       the rest **on a branch**, not on `main`.
-- [ ] **7.3 Fetch + merge** `origin/main` into amd-halo's branch. Expect
+- [x] **7.3 Fetch + merge** `origin/main` into amd-halo's branch. Expect
       conflicts in `index.md` / `log.md`; resolve deliberately.
-- [ ] **7.4 Reconcile the two raw notes.** Diff
+- [x] **7.4 Reconcile the two raw notes.** Diff
       `raw/notes/lemonade-model-aliases.md` and
       `raw/notes/lemonade-aliases-how-it-works.md` across hosts and pick a
       winner. Small diff (~36 insertions / 22 deletions).
-- [ ] **7.5 Push**, and confirm origin now contains amd-halo's work.
-- [ ] **7.6 Choose ONE canonical writer.** Two live writers against a
+- [x] **7.5 Push**, and confirm origin now contains amd-halo's work.
+- [x] **7.6 Choose ONE canonical writer.** Two live writers against a
       `pull --ff-only` mirror guarantees conflicts. Either amd-halo becomes
       canonical (move `brain-sync` there, stop lobsterboy's timer, make
       `/srv/2ndbrain` read-only or delete it) **or** lobsterboy stays canonical
       (then reconcile amd-halo back to it and stop editing amd-halo's copy).
-- [ ] **7.7 Only now: migrate `oc-personal`.**
-      1. Clone the repo to amd-halo (`~/projects/Project-Jarvis` or similar).
-      2. Install `brain-mcp` first (its venv is a prerequisite of `oc-personal`).
-      3. Install `google-mcp`; copy creds to `~/.config/oc-personal/` (0600).
-      4. Install `oc-personal`; rewrite `OC_MCP_SERVERS` paths and
-         `BRAIN_VAULT_PATH=~/projects/2ndBrain`.
-      5. Recreate the Google token-refresh cron.
-      6. Start it; expect 12 tools and `agent_ready: true` on `/healthz`.
-- [ ] **7.8 Repoint the device.** NVS `oc_host` → `http://192.168.1.118:8080`
+      **Decided: amd-halo is the writer** (see §12).
+- [x] **7.7 Migrate `oc-personal`** — done 2026-11-08.
+      1. amd-halo already had a checkout; fast-forwarded it to `origin/main`.
+      2. `brain-mcp` venv built first (prerequisite of `oc-personal`).
+      3. `google-mcp` venv built; creds + `secrets.env` copied from lobsterboy to
+         `~/.config/oc-personal/` (0600).
+      4. `oc-personal` installed as a **system** unit
+         (`/etc/systemd/system/oc-personal.service` + `.service.d/override.conf`,
+         rendered by hand because `deploy.sh install` is interactive). Paths
+         rewritten to `/home/jarod7736/projects/Project-Jarvis/...`,
+         `BRAIN_VAULT_PATH=/home/jarod7736/projects/2ndBrain`,
+         `OC_BACKEND_URL=http://127.0.0.1:13305`.
+      5. Google token-refresh cron recreated here; lobsterboy's removed (one
+         refresher only).
+      6. `/healthz` shows 12 tools + `agent_ready: true`; passthrough,
+         `brain_search` and `gcal_list_events` all verified end-to-end.
+      - **Deviation:** port **17707**, not 8080 — 8080 is reserved for the Open
+        WebUI container. Repo defaults updated to match (`config.py`,
+        `deploy.sh`, `morning-brief`).
+      - **Extra fix:** the three pyprojects pinned `mcp<2` — fresh venvs pulled
+        `mcp` 2.x, which renamed `FastMCP`→`MCPServer` and crash-looped the
+        runner (`brain-mcp` child died → `Connection closed` → exit 3).
+- [ ] **7.8 Repoint the device.** NVS `oc_host` → `http://192.168.1.118:17707`
       via captive portal or serial provisioning. No reflash.
-- [ ] **7.9 Verify on hardware:** wake word, one passthrough question, one
-      `personal_query`, one calendar or inbox read (proves OAuth survived).
+      **BLOCKED 2026-11-08:** the value was set but the device still says
+      "can't reach my notes". `getConnectivityTier()` TCP-probes `oc_host`; when
+      that fails the router short-circuits `personal_query` to
+      `kErrPersonalOffline` *before* any HTTP call — and neither host sees a
+      request from the device. Firewall, LAN path, secrets-blanking and TLS
+      misuse all ruled out. Needs the device's real `oc_host`, readable only from
+      the serial console (`[OC] host=<value>` on boot). Watch the scheme:
+      `makeUrl()` prepends `https://` when the value has none, while the probe
+      assumes `http` — so the value must be `http://192.168.1.118:17707`.
+- [ ] **7.9 Verify on hardware** — blocked on 7.8. Wake word, one passthrough
+      question, one `personal_query`, one calendar or inbox read. (The
+      server-side equivalents already pass against amd-halo:127.0.0.1.)
 - [ ] **7.10 Retire the lobsterboy copy** of `oc-personal` (unit + drop-in).
       Keep the drop-in backup until the new box has run for a week.
+      **Do not retire while 7.8 is broken** — lobsterboy is currently the only
+      path that reaches the device.
 
 ---
 
@@ -234,7 +260,8 @@ constraint, one OAuth token and its cron, and an NVS change on the device.
 - `AGENTS.md` — no test/lint/CI anywhere; `deploy.sh test` is the smoke path.
 - Lemonade: `192.168.1.118:13305`, alias `coder` → `Coder`, container
   `lemonade-server`, volume `lemonade-data`.
-- Runner: `192.168.1.178:8080` (today), `/healthz` reports `agent_model`,
+- Runner: `http://192.168.1.118:17707` on amd-halo (moved from
+  `192.168.1.178:8080` 2026-11-08), `/healthz` reports `agent_model`,
   `proxy_model`, 12 tools.
 
 ---

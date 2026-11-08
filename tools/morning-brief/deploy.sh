@@ -58,10 +58,13 @@ cmd_survey() {
     fi
 
     header "Upstreams"
-    if curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then
-        ok "oc-personal reachable @ http://localhost:8080"
+    # The runner moved off this host to amd-halo (centralize.md §7.7), so the
+    # probe follows OC_PERSONAL_URL rather than assuming localhost.
+    OC_URL="${OC_PERSONAL_URL:-http://192.168.1.118:17707}"
+    if curl -fsS "$OC_URL/healthz" >/dev/null 2>&1; then
+        ok "oc-personal reachable @ $OC_URL"
     else
-        warn "oc-personal not reachable @ http://localhost:8080 — install/start it first"
+        warn "oc-personal not reachable @ $OC_URL — install/start it first"
     fi
     if curl -fsS http://localhost:8081/healthz >/dev/null 2>&1; then
         ok "jarvis-notifier reachable @ http://localhost:8081"

@@ -33,8 +33,8 @@ Mic (LLM Module)
       ├── HA action/query      → HA REST API (WiFi)
       ├── Complex reasoning    → oc-personal runner / local LLM (LAN/Tailscale)
       ├── Creative / nuanced   → same as above (Claude path severed; see Backends)
-      ├── Personal query       → 2nd Brain RAG via oc-personal (lobsterboy)
-      └── Journal note         → 2nd Brain capture via oc-personal (lobsterboy)
+      ├── Personal query       → 2nd Brain RAG via oc-personal (amd-halo)
+      └── Journal note         → 2nd Brain capture via oc-personal (amd-halo)
   → Response text → CoreS3
   → TTS — kokoro on Lemonade (amd-halo) by default; cloud (OpenAI / ElevenLabs) off-LAN; melotts on the LLM Module as last resort
   → CoreS3 display — shows transcript, status, readable data
@@ -54,7 +54,7 @@ Mic (LLM Module)
 |4   |2nd Brain RAG via `oc-personal`        |3–8s    |Personal knowledge, voice notes       |
 |5   |Qwen 0.5B (offline fallback only)      |~instant|No network available                  |
 
-The "OpenClaw" endpoint is now lobsterboy's `oc-personal-runner` (Phase 8) — an OpenAI-compatible front that handles `model="oc-personal"` natively (multi-MCP agent loop on the Lemonade `coder` alias) and proxies every other model name through to Lemonade at `amd-halo:13305` (model rewritten to `coder` via `OC_PROXY_FORCE_MODEL`). CoreS3 sends standard `POST /v1/chat/completions`; the runner picks the path based on the `model` field. OpenClaw itself was decommissioned 2026-08-30 — the runner is self-contained and never depended on it.
+The "OpenClaw" endpoint is now amd-halo's `oc-personal-runner` (Phase 8; moved off lobsterboy 2026-11-08, `plans/centralize.md` §7.7) — an OpenAI-compatible front on port `17707` that handles `model="oc-personal"` natively (multi-MCP agent loop on the Lemonade `coder` alias) and proxies every other model name through to Lemonade (model rewritten to `coder` via `OC_PROXY_FORCE_MODEL`). CoreS3 sends standard `POST /v1/chat/completions`; the runner picks the path based on the `model` field. OpenClaw itself was decommissioned 2026-08-30 — the runner is self-contained and never depended on it.
 
 -----
 
@@ -63,7 +63,7 @@ The "OpenClaw" endpoint is now lobsterboy's `oc-personal-runner` (Phase 8) — a
 - **HA REST API** — light control, lock/unlock, sensor queries, automations
 - **oc-personal runner / Local LLM** — complex questions, multi-step tasks. Agent loop + passthrough on Lemonade (`coder` alias) at amd-halo.
 - **Claude API** — **severed.** `config::kAnthropicDirectEnabled = false` stops `IntentRouter` from ever calling `AnthropicClient`; the code, the NVS `anth_key` field, and the portal input all remain, so flipping one flag restores it. The runner dropped its Anthropic dependency in `5116d57`, so nothing here reaches `api.anthropic.com` today. The `claude` intent is now served by Lemonade `coder` like any other local query — and therefore no longer works on HOTSPOT_ONLY.
-- **2nd Brain (`oc-personal`)** — personal knowledge wiki at `jarod7736/2ndBrain`. Read via `brain_search`, write via `brain_capture`. Runs as an MCP server (`tools/brain-mcp/`) on lobsterboy, fronted by an agent runner (`tools/oc-personal-runner/`) that drives the Lemonade `coder` model with the MCP tools attached.
+- **2nd Brain (`oc-personal`)** — personal knowledge wiki at `jarod7736/2ndBrain`. Read via `brain_search`, write via `brain_capture`. Runs as an MCP server (`tools/brain-mcp/`) on amd-halo, fronted by an agent runner (`tools/oc-personal-runner/`) that drives the Lemonade `coder` model with the MCP tools attached.
 - **On-device** — timers, time/date, math, OTA, canned responses
 
 -----
@@ -79,7 +79,7 @@ Phone hotspot only        → on-device handlers + Qwen only (Claude path severe
 No network                → Qwen local only (offline tier)
 ```
 
-`personal_query` and `journal_note` require LAN or Tailscale because the 2nd Brain MCP server lives on lobsterboy. On HOTSPOT_ONLY / OFFLINE the firmware short-circuits to `kErrPersonalOffline` ("I can't reach my notes right now.") rather than burning HTTP timeout budget on a doomed call.
+`personal_query` and `journal_note` require LAN or Tailscale because the 2nd Brain MCP server lives on amd-halo. On HOTSPOT_ONLY / OFFLINE the firmware short-circuits to `kErrPersonalOffline` ("I can't reach my notes right now.") rather than burning HTTP timeout budget on a doomed call.
 
 Credentials stored in ESP32 NVS (non-volatile storage), not hardcoded.  
 HA long-lived token, oc-personal URL, and TTS API key all live in NVS.
@@ -166,7 +166,7 @@ See [`plans/phase8-2nd-brain-validation.md`](plans/phase8-2nd-brain-validation.m
 - [x] `tools/brain-mcp/` — Python MCP server, 6-tool catalog (`brain_search`, `brain_capture`, `brain_lint`, `brain_list_projects`, `brain_set_next_action`, `brain_ingest_status`)
 - [x] `tools/google-mcp/` — Gmail + Calendar MCP, 6-tool catalog
 - [x] `tools/oc-personal-runner/` — FastAPI multi-MCP agent (12 tools total), proxies non-personal models to local backend
-- [x] Deployed on lobsterboy; Jarvis NVS `oc_host` repointed at the runner
+- [x] Deployed on lobsterboy (Phase 8); **moved to amd-halo 2026-11-08** (`plans/centralize.md` §7.7) — runner + brain-mcp + google-mcp, port `17707`. Jarvis NVS `oc_host` repointed at the runner.
 - [x] Validation gates 1–6 ✅; gate 7 (OFFLINE tier real-device break) and gates 8–10 (ingest / lint / sync-collision) deferred
 
 ### Post-Phase 8 — Sprint 1 / Sprint 2 features (active)
@@ -199,7 +199,7 @@ External:
 - [M5Module-LLM Arduino API](https://docs.m5stack.com/en/stackflow/module_llm/arduino_api)
 - [LLM Module JSON API](https://docs.m5stack.com/en/stackflow/module_llm/api)
 - [CoreS3 Docs](https://docs.m5stack.com/en/core/CoreS3)
-- oc-personal endpoint (LAN): `http://192.168.1.178:8080` — the device path. Tailscale fallback: `https://lobsterboy.tail1c66ec.ts.net`.
+- oc-personal endpoint (LAN): `http://192.168.1.118:17707` on amd-halo — the device path. (Was `192.168.1.178:8080` on lobsterboy before the 2026-11-08 move; lobsterboy remains as rollback until retired.)
 - HA Nabu Casa: `pczxegrio1uswrn1pi0c2cpnfdjomwkx.ui.nabu.casa`
 
 In-tree:
