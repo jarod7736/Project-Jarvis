@@ -259,6 +259,11 @@ The rule that follows:
   is object storage and never mounted as a working tree.
 - Every copy is a clone with one of two roles: a **writer** (pull → edit →
   commit → push) or a **read-only mirror** (pull only, never commit).
+- **Exactly one writer, and one git actor per checkout.** amd-halo's clone is the
+  designated writer — it runs the ingest service *and* hosts the agent, so
+  `brain-mcp`'s `brain_capture` lands in the same `raw/` the ingest publishes
+  from. The agent writes files; the publish service owns every `git` command.
+  Two git actors on one tree is precisely how the old divergence happened.
 - If two writers collide, git reports it at push time. That is the desired
   behaviour — it is what the current setup lacks.
 - Garage is for **snapshots, not the working tree**: nightly `git bundle` (or

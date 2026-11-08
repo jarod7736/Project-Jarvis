@@ -158,26 +158,36 @@ queues runs; re-enable with `gh workflow enable daily-brain-ingest.yml` only
 once one of the shapes below is in place. The YAML carries a header comment
 saying the same, since a repo-level disable is invisible in the file.
 
-Two viable shapes:
+**Decided (2026-11-07): run ingest on amd-halo, not in Actions.** The GitHub
+workflow stays disabled — it is replaced, not repaired. amd-halo's checkout
+becomes the *designated writer*: it pulls, ingests new `raw/` with Lemonade
+`coder`, and pushes `wiki/ index.md log.md`. Everything else is a pull-only
+client. This removes the reachability problem by removing it (ingest runs where
+the model runs) at the cost of run history living in `journalctl` rather than
+the Actions UI.
 
-- **A. Self-hosted runner on amd-halo (recommended).** `runs-on: [self-hosted,
-  …]`, call `http://127.0.0.1:13305` with model `coder`. No tunnel, no exposure,
-  no availability cost (amd-halo must be up anyway to serve the model).
-  No runner is installed on either box today. `opencode` 1.18.32 is already on
-  amd-halo (`~/.opencode/bin/opencode`, config under `~/.config/opencode/`) and
-  is the closest drop-in for `claude -p`; the alternative is Claude Code via
-  CCR, which they already use elsewhere.
-- **B. Hosted runner + Tailscale.** Add `tailscale/github-action` with an
-  ephemeral auth key, then reach the tailnet IP. Needs a Tailscale OAuth client,
-  a tag, an ACL entry for amd-halo:13305, and new repo secrets. More moving
-  parts for no availability gain.
+Sequencing:
 
-Still open: which harness drives the ingest (opencode vs Claude-via-CCR vs a
-bespoke tool-loop script), and whether the ingest should stay LLM-driven at all.
+1. **Move `oc-personal` + `brain-mcp` + `google-mcp` to amd-halo** (section G).
+   Once there, the agent reads amd-halo's checkout directly and lobsterboy's
+   `/srv/2ndbrain` clone plus its `brain-sync` timer can be deleted. This also
+   answers `brain_capture`: it writes into `raw/` on the same host, no ingress
+   endpoint needed.
+2. **Build the ingest service there.** Gate on `driver.sh new-sources` (free when
+   idle) → `opencode run` against `coder` → commit only `wiki/ index.md log.md`
+   → push, with one `pull --rebase` retry. `opencode` 1.18.32 is installed but
+   has **no Lemonade provider configured** (`cli.json` has `providers=[]`), so
+   that config comes first.
+3. **One git actor per checkout.** The publish service owns
+   `git add/commit/pull/push`; `brain-mcp` only writes files into `raw/` and
+   never runs git. Two git actors on one tree is how the old divergence
+   happened.
+4. **Rollout discipline.** First runs stop before pushing so the diff can be
+   reviewed. `lint` fails a run only if its issue count *increases* (23 known
+   heuristics today), never on absolute count.
 
-Blocked knock-on: the Mac clone has 6 raw files committed locally (`6f42026`)
-and unpushed — pushing them triggers an ingest run that fails until this is
-fixed, so hold the push.
+The Mac clone's six raw files (`6f42026`) are now safe to push — the workflow is
+disabled, so nothing fires. They will sit in `raw/` until the writer exists.
 
 ---
 
