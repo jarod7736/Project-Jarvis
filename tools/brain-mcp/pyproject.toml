@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "MCP server exposing the 2nd Brain wiki to OpenClaw (Project Jarvis Phase 8)"
 requires-python = ">=3.11"
 dependencies = [
-    "mcp>=1.0.0",
+    # mcp 2.x renamed FastMCP -> MCPServer and broke `mcp.server.fastmcp`;
+    # this server targets the 1.x API. Do not drop the <2 bound.
+    "mcp>=1.0.0,<2",
 ]
 
 [project.scripts]
