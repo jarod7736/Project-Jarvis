@@ -69,8 +69,7 @@ PROXY_MIN_MAX_TOKENS = int(os.environ.get("OC_PROXY_MIN_MAX_TOKENS", "512"))
 #
 # Opt-in rather than always-on: this is a llama.cpp/Qwen chat-template knob, and
 # a backend that doesn't accept it (Ollama, vLLM) should leave it unset. Only the
-# pass-through path is affected — the agent loop keeps thinking, because it needs
-# it for tool routing.
+# pass-through path is affected — see AGENT_DISABLE_THINKING for the agent loop.
 PROXY_DISABLE_THINKING = os.environ.get(
     "OC_PROXY_DISABLE_THINKING", "0"
 ).strip().lower() in ("1", "true", "yes", "on")
@@ -82,6 +81,21 @@ PROXY_DISABLE_THINKING = os.environ.get(
 # is tool routing against a 10-tool schema, and `chat` burns an order of
 # magnitude more completion tokens on reasoning to reach the same call.
 AGENT_MODEL = os.environ.get("OC_AGENT_MODEL", "coder")
+
+# Disable the reasoning channel on the AGENT loop. This was historically left on
+# ("the agent needs it for tool routing"), but that is wrong in practice:
+# measured on Qwen3.8-27B via Lemonade 2026.45.3 (2026-11-08), one calendar
+# tool-call turn took **12.6 s with thinking vs 3.1 s without**, and the tool
+# call was identical (`gcal_list_events`). The device's HTTP read timeout is 12 s
+# (`src/config.h:kOcHttpTimeoutMs`) and a turn can chain up to MAX_AGENT_TURNS of
+# them, so thinking-on is unreachable on hardware: the runner eventually answers
+# 200, but the CoreS3 has already given up and speaks "I can't reach my notes".
+#
+# Same caveat as PROXY_DISABLE_THINKING: a Qwen/llama.cpp template knob; leave it
+# unset on backends that reject it.
+AGENT_DISABLE_THINKING = os.environ.get(
+    "OC_AGENT_DISABLE_THINKING", "0"
+).strip().lower() in ("1", "true", "yes", "on")
 
 # How long to wait on a backend reply. The agent replays up to 8 KB of tool
 # output per turn, so prefill alone can run tens of seconds on a large local

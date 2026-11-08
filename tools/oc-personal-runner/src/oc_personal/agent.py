@@ -195,13 +195,22 @@ class BrainAgent:
             final_text = ""
             for _turn in range(config.MAX_AGENT_TURNS):
                 try:
-                    resp = await self._backend.chat({
+                    payload: dict[str, Any] = {
                         "model": config.AGENT_MODEL,
                         "messages": messages,
                         "tools": self._tools_openai,
                         "max_tokens": config.AGENT_MAX_TOKENS,
                         "stream": False,
-                    })
+                    }
+                    # Qwen/llama.cpp chat-template knob. Keeps tool routing
+                    # intact while dropping the hidden reasoning channel that
+                    # otherwise dominates per-turn latency — see
+                    # config.AGENT_DISABLE_THINKING for the measurements.
+                    if config.AGENT_DISABLE_THINKING:
+                        payload["chat_template_kwargs"] = {
+                            "enable_thinking": False,
+                        }
+                    resp = await self._backend.chat(payload)
                 except BackendError as exc:
                     log.warning("agent backend call failed: %s", exc)
                     return _openai_error(str(exc))
