@@ -167,3 +167,71 @@ lever is best aimed at the *thinking* model, not the 45 ms transcriber.
   of `hermes-control.md`).
 - Host `lemond` 11.8.1 vs the container's 2026.45.3 — which serves the box day
   to day (container confirmed active; fallback described in the unit).
+
+---
+
+## 9. Audio-in chat models (`chat-transcription`) — tested 2026-11-08
+
+Two things named "omni" exist, and they are not the same:
+
+- **`LMX-Omni-*`** = `collection.omni` **bundles** (planner LLM + image model +
+  ASR + TTS) orchestrated by the server's OmniRouter. Their ASR is a *tool*
+  (client-side); they do **not** unify speech-in. Not useful for Jarvis.
+- **`chat-transcription` models** = a single model that takes audio **inside the
+  chat turn**. This is the real one-hop input.
+
+**Wire shape (undocumented, verified working):** audio goes into
+`POST /v1/chat/completions` as a content part, parallel to `image_url`:
+
+```json
+{"type":"input_audio","input_audio":{"data":"<base64 WAV>","format":"wav"}}
+```
+
+### `Qwen2.5-Omni-3B-GGUF` (llamacpp, GPU)
+
+Pulled (4.7 GB). Cold first load **22.1 s**; warm **0.12–0.92 s**.
+
+| Prompt | Warm | Output |
+|---|---|---|
+| "Transcribe verbatim" | 0.76 s | *"The weather is sunny and warm with a high of 82 degrees"* ← **hallucinated** |
+| "Transcribe verbatim" (again) | 0.12 s | *"What is the weather like in Austin today"* ✓ |
+| "What is the person asking for?" | 0.70 s | ✓ |
+| "What did the person say?" | 0.92 s | *"I'm unable to access the internet…"* ← answered instead of transcribing |
+
+Labels `chat, vision, chat-transcription` — **no `tool-calling`**. It can hear,
+but cannot act, and it is inconsistent at transcription (it is a chat model that
+can hear, not an ASR engine). Whisper remains more trustworthy for pure STT.
+
+### `gemma4-it-e4b-FLM` (flm, **NPU**) — the genuine one-hop voice agent
+
+Pulled (9.1 GB; the FLM `pull` is slow — tens of minutes). Runs on **npu**
+(backend `:8002`), leaving the GPU free for the big models. Consistent — unlike
+Qwen-Omni. Labels `audio, vision, reasoning, tool-calling, chat-transcription, chat`.
+
+| Test | Latency | Result |
+|---|---|---|
+| audio → transcribe (cold) | 7.53 s | *"Set a timer for 10 minutes."* ✓ |
+| audio → transcribe (warm) | 2.41 s | same ✓ (consistent) |
+| audio → intent | 2.57 s | *"wants to set a timer for ten minutes"* ✓ |
+| **audio → tool call** | **2.73 s** | `set_timer({"minutes":10})` ✓ |
+
+**This is the finding that changes the design.** One request: audio in →
+understanding → **structured tool call** out, in ~2.7 s, on the NPU.
+
+### Comparison
+
+| Path | Warm latency | Audio-in | Tools | Device |
+|---|---|---|---|---|
+| Whisper + coder agent (today) | ~5–10 s | separate call | yes | GPU |
+| `Qwen2.5-Omni-3B` | 0.1–0.9 s | one hop | **no** | GPU |
+| `gemma4-it-e4b-FLM` | 2.4–2.7 s | one hop | **yes** | **NPU** |
+| Whisper (pure ASR) | ~0.1 s | — | n/a | CPU |
+
+**Design implication:** the fast voice path can be a single
+`chat-transcription` + `tool-calling` model (hears → decides → calls a tool) on
+the NPU, with the GPU left for the heavy agent (coder). Whisper stays the pure
+ASR fallback; `LMX-Omni` bundles are not the answer.
+
+**Caveats:** e4b is small (shallow understanding); ~2.5 s is not sub-second;
+the FLM pull is slow; NPU needs `/dev/accel0` (present) + `xrt-smi`.
+Disk after both pulls: **72 GB free, 97 % used**.
